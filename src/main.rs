@@ -175,7 +175,7 @@ fn parse_slack_messages_to_chat_gpt_quesry_messages(
         .into_iter()
         .map(|m| {
             let role = if m.user == bot_member_id.as_str() {
-                "assisant"
+                "assistant"
             } else {
                 "user"
             };
@@ -267,6 +267,8 @@ async fn fetch_chat_gpt_response(
         }
         429 => return Ok("今日は営業終了にゃ!".to_string()),
         _ => {
+            let body = res.text().await?;
+            println!("Error from ChatGPT: {}", body);
             return Ok("エラーですにゃ。めんご。".to_string());
         }
     }
