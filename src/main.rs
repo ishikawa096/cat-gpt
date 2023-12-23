@@ -311,7 +311,7 @@ async fn post_slack_message(
 }
 
 // Slackイベントに応じて処理
-async fn process_slack_event(slack_event: SlackEvent) -> String {
+async fn handle_slack_event(slack_event: SlackEvent) -> String {
     return match slack_event.type_name.as_str() {
         // Slackの認証(初回のみ)
         "url_verification" => slack_event.challenge.unwrap(),
@@ -374,14 +374,22 @@ async fn process_slack_event(slack_event: SlackEvent) -> String {
     };
 }
 
-// slackからのリクエストを受け取る
-async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
+async fn handle_request(event: Request) -> String {
+    // retryの場合は、OKを返して処理を終了する
+    if event.headers().get("x-slack-retry-num").is_some() {
+        return "OK".to_string();
+    }
     let body_str = match event.body() {
         Body::Text(s) => s,
         _ => "",
     };
     let json: SlackEvent = serde_json::from_str(&body_str).unwrap();
-    let response_body = process_slack_event(json).await;
+    handle_slack_event(json).await
+}
+
+// slackからのリクエストを受け取る
+async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
+    let response_body = handle_request(event).await;
 
     let resp = Response::builder()
         .status(200)
