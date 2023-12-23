@@ -115,7 +115,9 @@ async fn fetch_messages_in_channel(
     headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
     headers.insert(
         header::AUTHORIZATION,
-        format!("Bearer {}", slack_auth_token).parse().unwrap(),
+        format!("Bearer {}", slack_auth_token)
+            .parse()
+            .expect("auth error"),
     );
 
     let client = reqwest::Client::new();
@@ -125,7 +127,7 @@ async fn fetch_messages_in_channel(
         .query(query)
         .send()
         .await?;
-    println!("conversations.history: {:?}", res);
+
     // エラーハンドリング
     if !res.status().is_success() {
         return Err(format!("Error: {}", res.status()).into());
@@ -148,10 +150,15 @@ async fn fetch_replies(
     ];
 
     let mut headers = header::HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+    headers.insert(
+        header::CONTENT_TYPE,
+        "application/json".parse().expect("parse error"),
+    );
     headers.insert(
         header::AUTHORIZATION,
-        format!("Bearer {}", slack_auth_token).parse().unwrap(),
+        format!("Bearer {}", slack_auth_token)
+            .parse()
+            .expect("auth error"),
     );
 
     let client = reqwest::Client::new();
@@ -161,7 +168,7 @@ async fn fetch_replies(
         .query(query)
         .send()
         .await?;
-    println!("conversations.replies: {:?}", res);
+
     // エラーハンドリング
     if !res.status().is_success() {
         return Err(format!("Error: {}", res.status()).into());
@@ -248,7 +255,6 @@ fn trim_mention_text(source: &str) -> String {
 fn parse_slack_messages_to_chat_gpt_quesry_messages(
     messages: Vec<SlackMessage>,
 ) -> Vec<OpenAiReqMessage> {
-    println!("messages: {:?}", messages);
     if messages.len() == 0 {
         return vec![];
     }
@@ -289,16 +295,14 @@ async fn create_request_body_for_chat_gpt(
     };
     let messages_asked_to_bot = fetch_messages_asked_to_bot(trigger_message).await?;
 
-    println!("messages_asked_to_bot: {:?}", messages_asked_to_bot);
-
     let mut messages = parse_slack_messages_to_chat_gpt_quesry_messages(messages_asked_to_bot);
     let system_message = OpenAiReqMessage {
         role: "system".to_string(),
         content: CHAT_GPT_SYSTEM_PROMPT.to_string(),
     };
-    println!("messages1: {:?}", messages);
+    // systemプロンプトを先頭に追加する
     messages.insert(0, system_message);
-    println!("messages2: {:?}", messages);
+
     let response = ChatGptReqBody {
         messages: messages,
         model: env.gpt_model,
@@ -327,7 +331,6 @@ async fn fetch_chat_gpt_response(
     );
 
     let request_body = create_request_body_for_chat_gpt(trigger_message).await?;
-    println!("request_body: {:?}", request_body);
     // systemメッセージのみの場合は終了
     if request_body.messages.len() < 2 {
         return Ok("".to_string());
@@ -340,8 +343,6 @@ async fn fetch_chat_gpt_response(
         .json(&request_body)
         .send()
         .await?;
-
-    println!("res: {:?}", res);
 
     match res.status().as_u16() {
         200 => {
@@ -386,8 +387,6 @@ async fn post_slack_message(
         "thread_ts": thread_ts,
     });
 
-    println!("json: {}", json.to_string());
-
     let client = reqwest::Client::new();
     let res = client
         .post(SLACK_POST_URL)
@@ -412,7 +411,7 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
         "url_verification" => slack_event.challenge.unwrap(),
         "event_callback" => {
             let trigger_message = slack_event.event.unwrap();
-            println!("trigger_message: {:?}", trigger_message);
+            // メッセージ以外の場合、OKを返して処理を終了する
             if trigger_message.type_name != "message" {
                 return "OK".to_string();
             }
@@ -478,7 +477,6 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
             };
         }
         _ => {
-            println!("slack_event type: {}", slack_event.type_name);
             return "OK".to_string();
         }
     };
