@@ -1,8 +1,11 @@
-use lambda_http::{run, service_fn, Body, Error, Request, Response};
+use hmac::{Hmac, Mac};
+use lambda_http::{http::HeaderMap, run, service_fn, Body, Error, Request, Response};
 use regex::Regex;
 use reqwest::header;
 use serde_derive::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::{error::Error as StdError, process};
+// use crate::msg; // Import the necessary module or crate
 
 const CHAT_GPT_POST_URL: &str = "https://api.openai.com/v1/chat/completions";
 const SLACK_POST_URL: &str = "https://slack.com/api/chat.postMessage";
@@ -39,6 +42,7 @@ struct Env {
     slack_auth_token: String,
     bot_chanel_id: String,
     openai_secret_key: String,
+    slack_signing_secret: String,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -94,6 +98,11 @@ struct SlackEvent {
     type_name: String,
     event: Option<SlackMessage>,
     challenge: Option<String>,
+}
+
+struct RequestData {
+    headers: HeaderMap,
+    body: String,
 }
 
 async fn fetch_messages_in_channel(
@@ -475,15 +484,61 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
     };
 }
 
+// https://api.slack.com/authentication/verifying-requests-from-slack
+fn validate_signature(event: RequestData) -> bool {
+    type HmacSha256 = Hmac<Sha256>;
+    let signature_header = "X-Slack-Signature";
+    let timestamp_header = "X-Slack-Request-Timestamp";
+
+    let signature = event
+        .headers
+        .get(signature_header)
+        .expect(format!("{} missing", signature_header).as_str())
+        .to_str()
+        .expect(format!("{} parse error", signature_header).as_str());
+    let timestamp = event
+        .headers
+        .get(timestamp_header)
+        .expect(format!("{} missing", timestamp_header).as_str())
+        .to_str()
+        .expect(format!("{} parse error", timestamp_header).as_str());
+    let env = match envy::from_env::<Env>() {
+        Ok(val) => val,
+        Err(err) => {
+            println!("{}", err);
+            process::exit(1);
+        }
+    };
+    let slack_signing_secret = &env.slack_signing_secret;
+    let basestring = format!("v0:{}:{}", timestamp, event.body);
+
+    // Slack Signing SecretをkeyとしてbasestringをHMAC SHA256でhashにする
+    let mut mac = HmacSha256::new_from_slice(slack_signing_secret.as_bytes())
+        .expect("Invalid Slack Signing Secret");
+    mac.update(basestring.as_bytes());
+    let expected_signature = mac.finalize();
+
+    // expected_signatureとsignatureが一致するか確認する
+    let expected_signature_str = hex::encode(expected_signature.into_bytes());
+    return format!("v0={}", expected_signature_str) == signature;
+}
+
 async fn handle_request(event: Request) -> String {
-    // retryの場合は、OKを返して処理を終了する
-    if event.headers().get("x-slack-retry-num").is_some() {
-        return "OK".to_string();
-    }
     let body_str = match event.body() {
         Body::Text(s) => s,
         _ => "",
     };
+    // signatureの検証
+    if !validate_signature(RequestData {
+        headers: event.headers().clone(),
+        body: body_str.to_string(),
+    }) {
+        return "NG".to_string();
+    }
+    // retryの場合は、OKを返して処理を終了する
+    if event.headers().get("x-slack-retry-num").is_some() {
+        return "OK".to_string();
+    }
     let json: SlackEvent = serde_json::from_str(&body_str).unwrap();
     handle_slack_event(json).await
 }
