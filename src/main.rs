@@ -4,6 +4,34 @@ use reqwest::header;
 use serde_derive::{Deserialize, Serialize};
 use std::{error::Error as StdError, process};
 
+const CHAT_GPT_POST_URL: &str = "https://api.openai.com/v1/chat/completions";
+const SLACK_POST_URL: &str = "https://slack.com/api/chat.postMessage";
+const SLACK_GET_REPLIES_URL: &str = "https://slack.com/api/conversations.replies";
+const SLACK_GET_HISTORY_URL: &str = "https://slack.com/api/conversations.history";
+
+const MESSAGE_FETCH_LIMIT: &str = "10";
+const TEMPERATURE: f32 = 0.3;
+
+const ERROR_MESSAGE: &str = "エラーですにゃ。めんご。";
+const EMPTY_MESSAGE: &str = "ちょっと調子悪いからまた後でよろしくにゃ。";
+const USAGE_LIMIT_MESSAGE: &str = "今日は営業終了にゃ!";
+const CHAT_GPT_SYSTEM_PROMPT: &str = "You are an friendly Cat AI assistant. \
+Please output your response message according to following format. \
+- bold: \"*bold*\" \
+- italic: \"_italic_\" \
+- strikethrough: \"~strikethrough~\" \
+- code: \"`code`\" \
+- link: \"<https://slack.com|link text>\" \
+- block: \"``` code block ```\" \
+- bulleted list: \"- item1\" \
+- quoted sentence: \">sentence\" \
+Be sure to include a space before and after the single quote in the sentence. \
+ex) word`code`word -> word `code` word \
+And Answer in language user uses. \
+If you use Japanese, your first person pronoun is \"我輩\" and the ending of your word is \"にゃ\".\
+If you use English, the ending of your word is \"meow\".\
+Let's begin.";
+
 #[derive(Deserialize)]
 struct Env {
     gpt_model: String,
@@ -68,15 +96,11 @@ struct SlackEvent {
     challenge: Option<String>,
 }
 
-async fn fetch_messages_in_thread(
+async fn fetch_messages_in_channel(
     channel_id: &str,
-    bot_member_id: &str,
     slack_auth_token: &str,
 ) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
-    let url = format!(
-        "https://slack.com/api/conversations.history?channel={}&user={}",
-        channel_id, bot_member_id
-    );
+    let query = &[("limit", MESSAGE_FETCH_LIMIT), ("channel", channel_id)];
 
     let mut headers = header::HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
@@ -86,7 +110,12 @@ async fn fetch_messages_in_thread(
     );
 
     let client = reqwest::Client::new();
-    let res = client.get(url).headers(headers).send().await?;
+    let res = client
+        .get(SLACK_GET_HISTORY_URL)
+        .headers(headers)
+        .query(query)
+        .send()
+        .await?;
     println!("conversations.history: {:?}", res);
     // エラーハンドリング
     if !res.status().is_success() {
@@ -95,7 +124,55 @@ async fn fetch_messages_in_thread(
 
     let body = res.text().await?;
     let json: SlackHistoryResponse = serde_json::from_str(&body)?;
-    return Ok(json.messages);
+    return Ok(order_by_ts(json.messages));
+}
+
+async fn fetch_replies(
+    channel_id: &str,
+    slack_auth_token: &str,
+    thread_ts: &str,
+) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
+    let query = &[
+        ("limit", MESSAGE_FETCH_LIMIT),
+        ("channel", channel_id),
+        ("ts", thread_ts),
+    ];
+
+    let mut headers = header::HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+    headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", slack_auth_token).parse().unwrap(),
+    );
+
+    let client = reqwest::Client::new();
+    let res = client
+        .get(SLACK_GET_REPLIES_URL)
+        .headers(headers)
+        .query(query)
+        .send()
+        .await?;
+    println!("conversations.replies: {:?}", res);
+    // エラーハンドリング
+    if !res.status().is_success() {
+        return Err(format!("Error: {}", res.status()).into());
+    }
+
+    let body = res.text().await?;
+    let json: SlackHistoryResponse = serde_json::from_str(&body)?;
+    return Ok(order_by_ts(json.messages));
+}
+
+// メッセージを時系列順にソートする
+fn order_by_ts(messages: Vec<SlackMessage>) -> Vec<SlackMessage> {
+    let order_by_ts = |a: &SlackMessage, b: &SlackMessage| {
+        let a_ts = a.ts.parse::<f64>().unwrap();
+        let b_ts = b.ts.parse::<f64>().unwrap();
+        a_ts.partial_cmp(&b_ts).unwrap()
+    };
+    let mut sorted_messages = messages;
+    sorted_messages.sort_by(order_by_ts);
+    return sorted_messages;
 }
 
 async fn fetch_messages_asked_to_bot(
@@ -111,40 +188,44 @@ async fn fetch_messages_asked_to_bot(
     let bot_member_id = &env.bot_member_id;
     let slack_auth_token = &env.slack_auth_token;
     let is_in_thread = trigger_message.thread_ts.is_some();
-    let is_mention = trigger_message.text.contains(bot_member_id);
-    let channel = trigger_message.channel.clone().unwrap();
+    let is_mention_to_bot = trigger_message.text.contains(bot_member_id);
+    let message_channel = trigger_message.channel.clone().unwrap();
+    let is_direct_message = message_channel == env.bot_chanel_id.as_str();
+    let thread_ts = trigger_message.thread_ts.clone().unwrap_or("".to_string());
 
-    println!("is_in_thread: {}", is_in_thread);
-    println!("is_mention: {}", is_mention);
-    println!("bot_chanel_id: {}", env.bot_chanel_id);
+    if is_direct_message {
+        // DMかつスレッド内の場合、スレッド内のメッセージを返す
+        if is_in_thread {
+            let messages_in_thread =
+                fetch_replies(&message_channel, slack_auth_token, &thread_ts).await?;
+            return Ok(messages_in_thread);
+        }
+        // DMかつスレッド外の場合、DM内のメッセージを返す
+        let messages = fetch_messages_in_channel(&message_channel, slack_auth_token).await?;
+        return Ok(messages);
+    }
 
-    // スレッド外の場合、botへのmentionかDMの場合のみメッセージを返す
-    if !is_in_thread && (is_mention || channel == env.bot_chanel_id.as_str()) {
+    // スレッド外の場合、botへのmentionの場合のみ、trigger_messageを返す
+    if !is_in_thread && is_mention_to_bot {
         return Ok(vec![trigger_message]);
-    } else if is_in_thread {
+    }
+
+    if is_in_thread {
         // bot以外へのメッセージの場合は無視する
-        let is_mention_to_other = !is_mention && trigger_message.text.contains("<@");
-        println!("is_mention_to_other: {}", is_mention_to_other);
+        let is_mention_to_other = !is_mention_to_bot && trigger_message.text.contains("<@");
         if is_mention_to_other {
             return Ok(vec![]);
         }
 
         let messages_in_thread =
-            fetch_messages_in_thread(channel.as_str(), bot_member_id, slack_auth_token).await?;
-        println!("messages_in_thread: {:?}", messages_in_thread);
-        // スレッド内でbotが発言しているかどうか
-        let is_bot_involved_thread = messages_in_thread.iter().any(|m| &m.user == bot_member_id);
-        println!("is_bot_involved_thread: {}", is_bot_involved_thread);
+            fetch_replies(&message_channel, slack_auth_token, &thread_ts).await?;
 
-        // スレッド内の場合、botへのmentionか、botが発言している場合はメッセージを返す
-        if is_mention || is_bot_involved_thread {
+        // botへのmentionか、botが発言しているスレッドの場合はメッセージを返す
+        if is_mention_to_bot || messages_in_thread.iter().any(|m| &m.user == bot_member_id) {
             return Ok(messages_in_thread);
-        } else {
-            return Ok(vec![]);
         }
-    } else {
-        return Ok(vec![]);
     }
+    return Ok(vec![]);
 }
 
 // メンションされたテキストから、メンション部分を除去して返す
@@ -170,11 +251,10 @@ fn parse_slack_messages_to_chat_gpt_quesry_messages(
             process::exit(1);
         }
     };
-    let bot_member_id = &env.bot_member_id;
     messages
         .into_iter()
         .map(|m| {
-            let role = if m.user == bot_member_id.as_str() {
+            let role = if &m.user == &env.bot_member_id {
                 "assistant"
             } else {
                 "user"
@@ -203,10 +283,9 @@ async fn create_request_body_for_chat_gpt(
     println!("messages_asked_to_bot: {:?}", messages_asked_to_bot);
 
     let mut messages = parse_slack_messages_to_chat_gpt_quesry_messages(messages_asked_to_bot);
-    let personality = "あなたは親切なネコ型AI。語尾は「にゃ」で、友達のような明るい口調です。一人称は「我輩」です。プログラミングに関する質問はよく考えて正しい提案をしてください。";
     let system_message = OpenAiReqMessage {
         role: "system".to_string(),
-        content: personality.to_string(),
+        content: CHAT_GPT_SYSTEM_PROMPT.to_string(),
     };
     println!("messages1: {:?}", messages);
     messages.insert(0, system_message);
@@ -214,7 +293,7 @@ async fn create_request_body_for_chat_gpt(
     let response = ChatGptReqBody {
         messages: messages,
         model: env.gpt_model,
-        temperature: 0.3,
+        temperature: TEMPERATURE,
     };
     return Ok(response);
 }
@@ -240,13 +319,14 @@ async fn fetch_chat_gpt_response(
 
     let request_body = create_request_body_for_chat_gpt(trigger_message).await?;
     println!("request_body: {:?}", request_body);
-    if request_body.messages.len() == 0 {
+    // systemメッセージのみの場合は終了
+    if request_body.messages.len() < 2 {
         return Ok("".to_string());
     }
 
     let client = reqwest::Client::new();
     let res = client
-        .post("https://api.openai.com/v1/chat/completions")
+        .post(CHAT_GPT_POST_URL)
         .headers(headers)
         .json(&request_body)
         .send()
@@ -260,16 +340,19 @@ async fn fetch_chat_gpt_response(
             let json: ChatGptResBody = serde_json::from_str(&body)?;
             let choices = json.choices;
             if choices.len() == 0 {
-                return Ok("……。".to_string());
+                return Ok(EMPTY_MESSAGE.to_string());
             }
             let text = choices[0].message.content.clone();
+            if text == "" {
+                return Ok(EMPTY_MESSAGE.to_string());
+            }
             return Ok(text);
         }
-        429 => return Ok("今日は営業終了にゃ!".to_string()),
+        429 => return Ok(USAGE_LIMIT_MESSAGE.to_string()),
         _ => {
             let body = res.text().await?;
             println!("Error from ChatGPT: {}", body);
-            return Ok("エラーですにゃ。めんご。".to_string());
+            return Ok(ERROR_MESSAGE.to_string());
         }
     }
 }
@@ -279,10 +362,8 @@ async fn post_slack_message(
     channel_id: &str,
     text: &str,
     slack_auth_token: &str,
-    thread_ts: String,
+    thread_ts: Option<&str>,
 ) -> Result<(), Box<dyn StdError>> {
-    let url = "https://slack.com/api/chat.postMessage";
-
     let mut headers = header::HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
     headers.insert(
@@ -299,7 +380,12 @@ async fn post_slack_message(
     println!("json: {}", json.to_string());
 
     let client = reqwest::Client::new();
-    let res = client.post(url).headers(headers).json(&json).send().await?;
+    let res = client
+        .post(SLACK_POST_URL)
+        .headers(headers)
+        .json(&json)
+        .send()
+        .await?;
     match res.status().as_u16() {
         200 => {
             return Ok(());
@@ -321,7 +407,7 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
             if trigger_message.type_name != "message" {
                 return "OK".to_string();
             }
-            // メッセージが編集または削除された場合、OKを返して処理を終了する
+            // 編集・削除通知など場合、OKを返して処理を終了する
             if trigger_message.subtype.is_some() {
                 return "OK".to_string();
             }
@@ -334,11 +420,8 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
                 }
             };
 
-            println!("bot_member_id: {}", env.bot_member_id.as_str());
-
-            let user_id = &trigger_message.user;
             // Bot自身によるメッセージである場合、OKを返して処理を終了する
-            if user_id == env.bot_member_id.as_str() {
+            if &trigger_message.user == &env.bot_member_id {
                 return "OK".to_string();
             }
             let channel = match trigger_message.channel.clone() {
@@ -348,27 +431,45 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
                     return "OK".to_string();
                 }
             };
-            let ts = trigger_message.ts.clone();
+            let is_direct_message = channel == env.bot_chanel_id.as_str();
+            let thread_ts = if is_direct_message {
+                // DMの場合はリプライにしない = thread_ts無し
+                None
+            } else if trigger_message.thread_ts.is_some() {
+                // スレッド内の場合はスレッドに返信する
+                trigger_message.thread_ts.clone()
+            } else {
+                // スレッド外の場合はスレッドを作る
+                Some(trigger_message.ts.clone())
+            };
+
             // TODO: 処理したメッセージのキャッシュを作る
 
             // ChatGPTの回答を取得する
-            // TODO: ChatGPTの回答が空の場合は、Slackにメッセージを送らない
-            let response_text = fetch_chat_gpt_response(trigger_message).await.unwrap();
-            println!("{}", response_text);
+            let response_text = fetch_chat_gpt_response(trigger_message)
+                .await
+                .unwrap_or(ERROR_MESSAGE.to_string());
+            // 空文字(botへのメッセージなし)の場合は終了
             if response_text == "" {
                 return "OK".to_string();
             }
+
             // SlackにChatGPTの回答を送る
-            let post =
-                post_slack_message(channel.as_str(), &response_text, &env.slack_auth_token, ts)
-                    .await;
+            let post = post_slack_message(
+                &channel,
+                &response_text,
+                &env.slack_auth_token,
+                thread_ts.as_deref(),
+            )
+            .await;
+
             return match post {
                 Ok(_) => "OK".to_string(),
                 Err(_) => "NG".to_string(),
             };
         }
         _ => {
-            println!("{}", slack_event.type_name);
+            println!("slack_event type: {}", slack_event.type_name);
             return "OK".to_string();
         }
     };
