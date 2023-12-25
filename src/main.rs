@@ -440,14 +440,15 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
                 }
             };
             let is_direct_message = channel == env.bot_chanel_id.as_str();
-            let thread_ts = if is_direct_message {
-                // DMの場合はリプライにしない = thread_ts無し
-                None
-            } else if trigger_message.thread_ts.is_some() {
+            let is_in_thread = trigger_message.thread_ts.is_some();
+            let thread_ts = if is_in_thread {
                 // スレッド内の場合はスレッドに返信する
                 trigger_message.thread_ts.clone()
+            } else if is_direct_message {
+                // DMかつスレッド外の場合はリプライにしない = thread_ts無し
+                None
             } else {
-                // スレッド外の場合はスレッドを作る
+                // DM以外かつスレッド外の場合はスレッドを作る
                 Some(trigger_message.ts.clone())
             };
 
