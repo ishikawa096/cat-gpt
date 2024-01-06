@@ -1,3 +1,5 @@
+use aws_config::{BehaviorVersion, Region};
+use aws_sdk_ssm::Client;
 use hmac::{Hmac, Mac};
 use lambda_http::{http::HeaderMap, run, service_fn, Body, Error, Request, Response};
 use regex::Regex;
@@ -41,6 +43,10 @@ Let's begin.";
 #[derive(Deserialize)]
 struct Env {
     gpt_model: String,
+}
+
+#[derive(Deserialize)]
+struct Parameters {
     bot_member_id: String,
     slack_auth_token: String,
     openai_secret_key: String,
@@ -196,16 +202,10 @@ fn order_by_ts(messages: Vec<SlackMessage>) -> Vec<SlackMessage> {
 
 async fn fetch_messages_asked_to_bot(
     trigger_message: SlackMessage,
+    parameters: Parameters,
 ) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
-    let env = match envy::from_env::<Env>() {
-        Ok(val) => val,
-        Err(err) => {
-            println!("{}", err);
-            process::exit(1);
-        }
-    };
-    let bot_member_id = &env.bot_member_id;
-    let slack_auth_token = &env.slack_auth_token;
+    let bot_member_id = &parameters.bot_member_id;
+    let slack_auth_token = &parameters.slack_auth_token;
     let is_in_thread = trigger_message.thread_ts.is_some();
     let is_mention_to_bot = trigger_message.text.contains(bot_member_id);
     let message_channel = trigger_message.channel.clone().unwrap();
@@ -257,22 +257,15 @@ fn trim_mention_text(source: &str) -> String {
 // SlackメッセージをChatGPTのクエリメッセージ形式に変換する
 fn parse_slack_messages_to_chat_gpt_quesry_messages(
     messages: Vec<SlackMessage>,
+    bot_member_id: &str,
 ) -> Vec<OpenAiReqMessage> {
     if messages.len() == 0 {
         return vec![];
     }
-
-    let env = match envy::from_env::<Env>() {
-        Ok(val) => val,
-        Err(err) => {
-            println!("{}", err);
-            process::exit(1);
-        }
-    };
     messages
         .into_iter()
         .map(|m| {
-            let role = if &m.user == &env.bot_member_id {
+            let role = if &m.user == bot_member_id {
                 "assistant"
             } else {
                 "user"
@@ -288,6 +281,7 @@ fn parse_slack_messages_to_chat_gpt_quesry_messages(
 
 async fn create_request_body_for_chat_gpt(
     trigger_message: SlackMessage,
+    parameters: Parameters,
 ) -> Result<ChatGptReqBody, Box<dyn StdError>> {
     let env = match envy::from_env::<Env>() {
         Ok(val) => val,
@@ -296,9 +290,11 @@ async fn create_request_body_for_chat_gpt(
             process::exit(1);
         }
     };
-    let messages_asked_to_bot = fetch_messages_asked_to_bot(trigger_message).await?;
+    let bot_menber_id = parameters.bot_member_id.clone();
+    let messages_asked_to_bot = fetch_messages_asked_to_bot(trigger_message, parameters).await?;
 
-    let mut messages = parse_slack_messages_to_chat_gpt_quesry_messages(messages_asked_to_bot);
+    let mut messages =
+        parse_slack_messages_to_chat_gpt_quesry_messages(messages_asked_to_bot, &bot_menber_id);
     let system_message = OpenAiReqMessage {
         role: "system".to_string(),
         content: CHAT_GPT_SYSTEM_PROMPT.to_string(),
@@ -317,23 +313,18 @@ async fn create_request_body_for_chat_gpt(
 // ChatGPTにリクエストを送る
 async fn fetch_chat_gpt_response(
     trigger_message: SlackMessage,
+    parameters: Parameters,
 ) -> Result<String, Box<dyn StdError>> {
-    let env = match envy::from_env::<Env>() {
-        Ok(val) => val,
-        Err(err) => {
-            println!("{}", err);
-            process::exit(1);
-        }
-    };
-
     let mut headers = header::HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
     headers.insert(
         header::AUTHORIZATION,
-        format!("Bearer {}", env.openai_secret_key).parse().unwrap(),
+        format!("Bearer {}", parameters.openai_secret_key)
+            .parse()
+            .unwrap(),
     );
 
-    let request_body = create_request_body_for_chat_gpt(trigger_message).await?;
+    let request_body = create_request_body_for_chat_gpt(trigger_message, parameters).await?;
     // systemメッセージのみの場合は終了
     if request_body.messages.len() < 2 {
         return Ok("".to_string());
@@ -408,7 +399,7 @@ async fn post_slack_message(
 }
 
 // Slackイベントに応じて処理
-async fn handle_slack_event(slack_event: SlackEvent) -> String {
+async fn handle_slack_event(slack_event: SlackEvent, parameters: Parameters) -> String {
     return match slack_event.type_name.as_str() {
         // Slackの認証(初回のみ)
         "url_verification" => slack_event.challenge.unwrap(),
@@ -422,17 +413,8 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
             if trigger_message.subtype.is_some() {
                 return "OK".to_string();
             }
-
-            let env = match envy::from_env::<Env>() {
-                Ok(val) => val,
-                Err(err) => {
-                    println!("{}", err);
-                    process::exit(1);
-                }
-            };
-
             // Bot自身によるメッセージである場合、OKを返して処理を終了する
-            if &trigger_message.user == &env.bot_member_id {
+            if &trigger_message.user == &parameters.bot_member_id.clone() {
                 return "OK".to_string();
             }
             let channel = match trigger_message.channel.clone() {
@@ -456,9 +438,9 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
             };
 
             // TODO: 処理したメッセージのキャッシュを作る
-
+            let slack_auth_token = &parameters.slack_auth_token.clone();
             // ChatGPTの回答を取得する
-            let response_text = fetch_chat_gpt_response(trigger_message)
+            let response_text = fetch_chat_gpt_response(trigger_message, parameters)
                 .await
                 .unwrap_or(ERROR_MESSAGE.to_string());
             // 空文字(botへのメッセージなし)の場合は終了
@@ -470,7 +452,7 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
             let post = post_slack_message(
                 &channel,
                 &response_text,
-                &env.slack_auth_token,
+                slack_auth_token,
                 thread_ts.as_deref(),
             )
             .await;
@@ -487,7 +469,7 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
 }
 
 // https://api.slack.com/authentication/verifying-requests-from-slack
-fn validate_signature(event: RequestData) -> bool {
+fn validate_signature(event: RequestData, slack_signing_secret: &str) -> bool {
     type HmacSha256 = Hmac<Sha256>;
     let signature_header = "X-Slack-Signature";
     let timestamp_header = "X-Slack-Request-Timestamp";
@@ -504,14 +486,6 @@ fn validate_signature(event: RequestData) -> bool {
         .expect(format!("{} missing", timestamp_header).as_str())
         .to_str()
         .expect(format!("{} parse error", timestamp_header).as_str());
-    let env = match envy::from_env::<Env>() {
-        Ok(val) => val,
-        Err(err) => {
-            println!("{}", err);
-            process::exit(1);
-        }
-    };
-    let slack_signing_secret = &env.slack_signing_secret;
     let basestring = format!("v0:{}:{}", timestamp, event.body);
 
     // Slack Signing SecretをkeyとしてbasestringをHMAC SHA256でhashにする
@@ -525,16 +499,44 @@ fn validate_signature(event: RequestData) -> bool {
     return format!("v0={}", expected_signature_str) == signature;
 }
 
+// ParameterStoreのパラメータを取得する
+async fn get_parameters() -> Result<Parameters, Error> {
+    let shared_config = aws_config::defaults(BehaviorVersion::v2023_11_09())
+        .region(Region::new("ap-northeast-1"))
+        .load()
+        .await;
+    let client = Client::new(&shared_config);
+
+    let resp = client
+        .get_parameter()
+        .with_decryption(true)
+        .name("slack-bot-test") // TODO: 環境変数から取得する
+        .send()
+        .await
+        .expect("cannot get parameter");
+
+    let parameters: Parameters = serde_json::from_str(&resp.parameter().unwrap().value().unwrap())
+        .expect("cannot parse parameter");
+
+    Ok(parameters)
+}
+
 async fn handle_request(event: Request) -> String {
     let body_str = match event.body() {
         Body::Text(s) => s,
         _ => "",
     };
+
+    let parameters = get_parameters().await.unwrap();
+
     // signatureの検証
-    if !validate_signature(RequestData {
-        headers: event.headers().clone(),
-        body: body_str.to_string(),
-    }) {
+    if !validate_signature(
+        RequestData {
+            headers: event.headers().clone(),
+            body: body_str.to_string(),
+        },
+        parameters.slack_signing_secret.as_str(),
+    ) {
         return "NG".to_string();
     }
     // retryの場合は、OKを返して処理を終了する
@@ -542,7 +544,7 @@ async fn handle_request(event: Request) -> String {
         return "OK".to_string();
     }
     let json: SlackEvent = serde_json::from_str(&body_str).unwrap();
-    handle_slack_event(json).await
+    handle_slack_event(json, parameters).await
 }
 
 // slackからのリクエストを受け取る
