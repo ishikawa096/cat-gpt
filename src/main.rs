@@ -43,7 +43,6 @@ struct Env {
     gpt_model: String,
     bot_member_id: String,
     slack_auth_token: String,
-    bot_chanel_id: String,
     openai_secret_key: String,
     slack_signing_secret: String,
 }
@@ -59,6 +58,7 @@ struct SlackMessage {
     user: String,
     channel: Option<String>,
     ts: String,
+    channel_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -95,7 +95,7 @@ struct ChatGptResBody {
     choices: Vec<ChatGptChoice>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct SlackEvent {
     #[serde(rename = "type")]
     type_name: String,
@@ -209,7 +209,7 @@ async fn fetch_messages_asked_to_bot(
     let is_in_thread = trigger_message.thread_ts.is_some();
     let is_mention_to_bot = trigger_message.text.contains(bot_member_id);
     let message_channel = trigger_message.channel.clone().unwrap();
-    let is_direct_message = message_channel == env.bot_chanel_id.as_str();
+    let is_direct_message = trigger_message.channel_type == Some("im".to_string());
     let thread_ts = trigger_message.thread_ts.clone().unwrap_or("".to_string());
 
     if is_direct_message {
@@ -442,7 +442,7 @@ async fn handle_slack_event(slack_event: SlackEvent) -> String {
                     return "OK".to_string();
                 }
             };
-            let is_direct_message = channel == env.bot_chanel_id.as_str();
+            let is_direct_message = trigger_message.channel_type == Some("im".to_string());
             let is_in_thread = trigger_message.thread_ts.is_some();
             let thread_ts = if is_in_thread {
                 // スレッド内の場合はスレッドに返信する
