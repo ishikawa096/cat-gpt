@@ -9,7 +9,7 @@ Resources:
     Properties:
       FunctionName: cat-gpt-slack-bot
       CodeUri: .
-      Description: A slack bot using ChatGPT
+      Description: ChatGPTを利用したSlackBotアプリ
       MemorySize: 128
       Timeout: 90
       Handler: bootstrap
@@ -54,7 +54,7 @@ Resources:
                 - lambda.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: AWSLambdaBasicExecutionRole-26ada336-22ce-4e18-8a55-0e39e7501973
+        - PolicyName: cat-gpt-slack-bot-policy
           PolicyDocument:
             Version: 2012-10-17
             Statement:
