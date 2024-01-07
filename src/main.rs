@@ -14,9 +14,6 @@ const SLACK_POST_URL: &str = "https://slack.com/api/chat.postMessage";
 const SLACK_GET_REPLIES_URL: &str = "https://slack.com/api/conversations.replies";
 const SLACK_GET_HISTORY_URL: &str = "https://slack.com/api/conversations.history";
 
-const MESSAGE_FETCH_LIMIT: &str = "10";
-const TEMPERATURE: f32 = 0.3;
-
 const ERROR_MESSAGE: &str = "エラーですにゃ。めんご。";
 const EMPTY_MESSAGE: &str =
     "OpenAIからの返答が空ですにゃ。調子が悪い可能性がありますにゃ。めんご。";
@@ -43,6 +40,9 @@ Let's begin.";
 #[derive(Deserialize)]
 struct Env {
     gpt_model: String,
+    parameter_store_name: String,
+    messages_fetch_limit: i32,
+    temperature: f32,
 }
 
 #[derive(Deserialize)]
@@ -118,7 +118,18 @@ async fn fetch_messages_in_channel(
     channel_id: &str,
     slack_auth_token: &str,
 ) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
-    let query = &[("limit", MESSAGE_FETCH_LIMIT), ("channel", channel_id)];
+    let env_args = match envy::from_env::<Env>() {
+        Ok(val) => val,
+        Err(err) => {
+            println!("{}", err);
+            process::exit(1);
+        }
+    };
+    let messages_fetch_limit = env_args.messages_fetch_limit.to_string();
+    let query = &[
+        ("limit", messages_fetch_limit.as_str()),
+        ("channel", channel_id),
+    ];
 
     let mut headers = header::HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
@@ -152,8 +163,16 @@ async fn fetch_replies(
     slack_auth_token: &str,
     thread_ts: &str,
 ) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
+    let env_args = match envy::from_env::<Env>() {
+        Ok(val) => val,
+        Err(err) => {
+            println!("{}", err);
+            process::exit(1);
+        }
+    };
+    let messages_fetch_limit = env_args.messages_fetch_limit.to_string();
     let query = &[
-        ("limit", MESSAGE_FETCH_LIMIT),
+        ("limit", messages_fetch_limit.as_str()),
         ("channel", channel_id),
         ("ts", thread_ts),
     ];
@@ -206,9 +225,12 @@ async fn fetch_messages_asked_to_bot(
 ) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
     let bot_member_id = &parameters.bot_member_id;
     let slack_auth_token = &parameters.slack_auth_token;
+    // TODO: SlackMessageに実装する
     let is_in_thread = trigger_message.thread_ts.is_some();
+    // TODO: SlackMessageに実装する
     let is_mention_to_bot = trigger_message.text.contains(bot_member_id);
     let message_channel = trigger_message.channel.clone().unwrap();
+    // TODO: SlackMessageに実装する
     let is_direct_message = trigger_message.channel_type == Some("im".to_string());
     let thread_ts = trigger_message.thread_ts.clone().unwrap_or("".to_string());
 
@@ -230,6 +252,7 @@ async fn fetch_messages_asked_to_bot(
     }
 
     if is_in_thread {
+        // TODO: SlackMessageに実装する
         // bot以外へのメッセージの場合は無視する
         let is_mention_to_other = !is_mention_to_bot && trigger_message.text.contains("<@");
         if is_mention_to_other {
@@ -239,6 +262,7 @@ async fn fetch_messages_asked_to_bot(
         let messages_in_thread =
             fetch_replies(&message_channel, slack_auth_token, &thread_ts).await?;
 
+        // TODO: SlackMessageに実装する(ユーザーがbotかどうか)
         // botへのmentionか、botが発言しているスレッドの場合はメッセージを返す
         if is_mention_to_bot || messages_in_thread.iter().any(|m| &m.user == bot_member_id) {
             return Ok(messages_in_thread);
@@ -247,6 +271,7 @@ async fn fetch_messages_asked_to_bot(
     return Ok(vec![]);
 }
 
+// TODO: SlackMessageに実装する
 // メンションされたテキストから、メンション部分を除去して返す
 fn trim_mention_text(source: &str) -> String {
     let re = Regex::new(r"^<.+> ").unwrap();
@@ -259,12 +284,10 @@ fn parse_slack_messages_to_chat_gpt_quesry_messages(
     messages: Vec<SlackMessage>,
     bot_member_id: &str,
 ) -> Vec<OpenAiReqMessage> {
-    if messages.len() == 0 {
-        return vec![];
-    }
     messages
         .into_iter()
         .map(|m| {
+            // TODO: SlackMessageに実装する
             let role = if &m.user == bot_member_id {
                 "assistant"
             } else {
@@ -283,7 +306,7 @@ async fn create_request_body_for_chat_gpt(
     trigger_message: SlackMessage,
     parameters: Parameters,
 ) -> Result<ChatGptReqBody, Box<dyn StdError>> {
-    let env = match envy::from_env::<Env>() {
+    let env_args = match envy::from_env::<Env>() {
         Ok(val) => val,
         Err(err) => {
             println!("{}", err);
@@ -300,12 +323,13 @@ async fn create_request_body_for_chat_gpt(
         content: CHAT_GPT_SYSTEM_PROMPT.to_string(),
     };
     // systemプロンプトを先頭に追加する
+    // TODO: 効率的に追加する
     messages.insert(0, system_message);
 
     let response = ChatGptReqBody {
         messages: messages,
-        model: env.gpt_model,
-        temperature: TEMPERATURE,
+        model: env_args.gpt_model,
+        temperature: env_args.temperature,
     };
     return Ok(response);
 }
@@ -501,6 +525,13 @@ fn validate_signature(event: RequestData, slack_signing_secret: &str) -> bool {
 
 // ParameterStoreのパラメータを取得する
 async fn get_parameters() -> Result<Parameters, Error> {
+    let env_args = match envy::from_env::<Env>() {
+        Ok(val) => val,
+        Err(err) => {
+            println!("{}", err);
+            process::exit(1);
+        }
+    };
     let shared_config = aws_config::defaults(BehaviorVersion::v2023_11_09())
         .region(Region::new("ap-northeast-1"))
         .load()
@@ -510,7 +541,7 @@ async fn get_parameters() -> Result<Parameters, Error> {
     let resp = client
         .get_parameter()
         .with_decryption(true)
-        .name("slack-bot-test") // TODO: 環境変数から取得する
+        .name(env_args.parameter_store_name)
         .send()
         .await
         .expect("cannot get parameter");

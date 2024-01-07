@@ -2,12 +2,19 @@
 
 - chatbot for slack
 
+## Build
+
+- sam build
+
+## Deploy
+
+- profile slack-bot の場合
+  sam deploy --guided --profile slack-bot --capabilities CAPABILITY_NAMED_IAM
+
 ## TODO
 
-- ロジックの切り出し、リファクタリング(どうしていけばいいのか rust の勉強から)
+- ロジックの切り出し、リファクタリング
 - lambda 以外の hosting に対応
-- cargo lambda でサクッと作りたかったが docker コンテナ内に cargo lambda がうまく入らなくて渋々ローカルマシン上で zip ファイルを build してデプロイしている。
-  ツール活かせていないのでうまく設定したい。
 
 ## 参考にさせていただきました
 
