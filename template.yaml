@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: A slack bot using ChatGPT
+Resources:
+  CatGptSlackBot:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: cat-gpt-slack-bot
+      CodeUri: .
+      Description: ChatGPTを利用したSlackBotアプリ
+      MemorySize: 128
+      Timeout: 90
+      Handler: bootstrap
+      Runtime: provided.al2023
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      Architectures:
+        - arm64
+      EphemeralStorage:
+        Size: 512
+      Environment:
+        Variables:
+          parameter_store_name: cat-gpt-slack-bot
+          gpt_model: gpt-4-1106-preview
+          messages_fetch_limit: 10
+          temperature: 0.3
+      FunctionUrlConfig:
+        AuthType: NONE
+        InvokeMode: BUFFERED
+        Cors:
+          AllowCredentials: false
+          AllowMethods:
+            - POST
+          AllowOrigins:
+            - '*'
+          MaxAge: 0
+      PackageType: Zip
+      SnapStart:
+        ApplyOn: None
+      Role: !GetAtt role.Arn
+
+  role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cat-gpt-slack-bot-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: cat-gpt-slack-bot-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: arn:aws:ssm:ap-northeast-1:*:parameter/cat-gpt-slack-bot
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: arn:aws:logs:ap-northeast-1:*:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - >-
+                    arn:aws:logs:ap-northeast-1:*:log-group:/aws/lambda/cat-gpt-slack-bot:*
