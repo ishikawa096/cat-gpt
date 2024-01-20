@@ -366,53 +366,51 @@ async fn post_slack_message(
 }
 
 // Slackイベントに応じて処理
-async fn handle_slack_event(slack_event: SlackEvent, parameters: Parameters) -> String {
-    return match slack_event.type_name.as_str() {
-        // Slackの認証(初回のみ)
-        "url_verification" => slack_event.challenge.unwrap(),
-        "event_callback" => {
-            let trigger_message = slack_event.event.unwrap();
-            // 反応不要のメッセージの場合は終了
-            if !trigger_message.reply_required(&parameters.bot_member_id) {
-                return "OK".to_string();
-            }
+async fn handle_slack_event(slack_event: SlackEvent, parameters: Parameters) -> () {
+    // event_callback以外は無視する
+    if slack_event.type_name.as_str() != "event_callback" {
+        return ();
+    }
 
-            let channel = match trigger_message.channel.clone() {
-                Some(val) => val,
-                None => {
-                    println!("channel is none. trigger_message: {:?}", trigger_message);
-                    return "OK".to_string();
-                }
-            };
-            let thread_ts = trigger_message.new_message_thread_ts();
+    let trigger_message = slack_event.event.unwrap();
+    // 反応不要のメッセージの場合は終了
+    if !trigger_message.reply_required(&parameters.bot_member_id) {
+        return ();
+    }
 
-            // TODO: 処理したメッセージのキャッシュを作る
-            let slack_auth_token = &parameters.slack_auth_token.clone();
-            // ChatGPTの回答を取得する
-            let response_text = fetch_chat_gpt_response(trigger_message, parameters)
-                .await
-                .unwrap_or(ERROR_MESSAGE.to_string());
-            // 空文字(botへのメッセージなし)の場合は終了
-            if response_text == "" {
-                return "OK".to_string();
-            }
-
-            // SlackにChatGPTの回答を送る
-            let post = post_slack_message(
-                &channel,
-                &response_text,
-                slack_auth_token,
-                thread_ts.as_deref(),
-            )
-            .await;
-
-            return match post {
-                Ok(_) => "OK".to_string(),
-                Err(_) => "NG".to_string(),
-            };
+    let channel = match trigger_message.channel.clone() {
+        Some(val) => val,
+        None => {
+            println!("channel is none. trigger_message: {:?}", trigger_message);
+            return ();
         }
-        _ => {
-            return "OK".to_string();
+    };
+    let thread_ts = trigger_message.new_message_thread_ts();
+
+    let slack_auth_token = &parameters.slack_auth_token.clone();
+    // ChatGPTの回答を取得する
+    let response_text = fetch_chat_gpt_response(trigger_message, parameters)
+        .await
+        .unwrap_or(ERROR_MESSAGE.to_string());
+    // 空文字(botへのメッセージなし)の場合は終了
+    if response_text == "" {
+        return ();
+    }
+
+    // SlackにChatGPTの回答を送る
+    let post = post_slack_message(
+        &channel,
+        &response_text,
+        slack_auth_token,
+        thread_ts.as_deref(),
+    )
+    .await;
+
+    return match post {
+        Ok(_) => (),
+        Err(e) => {
+            println!("Error: {}", e);
+            ()
         }
     };
 }
@@ -504,5 +502,15 @@ pub async fn handle_request(event: Request) -> String {
         Ok(j) => j,
         Err(_) => return "NG".to_string(),
     };
-    handle_slack_event(slack_event, parameters).await
+
+    // Slack appの登録(初回のみ)
+    if slack_event.challenge.is_some() {
+        return slack_event.challenge.unwrap();
+    }
+
+    // TODO: responseを返しつつ別のlambda関数で非同期に処理する
+    // task::spawn(async move { handle_slack_event(slack_event, parameters).await });
+    handle_slack_event(slack_event, parameters).await;
+
+    "OK".to_string()
 }
