@@ -1,16 +1,20 @@
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_ssm::Client;
+use futures::StreamExt;
 use hmac::{Hmac, Mac};
 use lambda_http::{http::HeaderMap, Body, Error, Request};
 use reqwest::header;
 use serde_derive::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::ops::Add;
+use std::time::{Duration, Instant};
 use std::{error::Error as StdError, process};
 
 use crate::constants::{
-    CHAT_GPT_POST_URL, CHAT_GPT_SYSTEM_PROMPT, EMPTY_MESSAGE, ERROR_MESSAGE, SLACK_GET_HISTORY_URL,
-    SLACK_GET_REPLIES_URL, SLACK_POST_URL, USAGE_LIMIT_MESSAGE,
+    CHAT_GPT_SYSTEM_PROMPT, FINISH_EMOJI, LOADING_EMOJI, SLACK_GET_HISTORY_URL,
+    SLACK_GET_REPLIES_URL,
 };
+use crate::slack_post_handler::api_client::ApiClient;
 use crate::slack_post_handler::slack_message::SlackMessage;
 
 #[derive(Deserialize)]
@@ -21,11 +25,11 @@ struct Env {
     temperature: f32,
 }
 
-#[derive(Deserialize)]
-struct Parameters {
-    bot_member_id: String,
-    slack_auth_token: String,
-    openai_secret_key: String,
+#[derive(Deserialize, Clone)]
+pub struct Parameters {
+    pub bot_member_id: String,
+    pub slack_auth_token: String,
+    pub openai_secret_key: String,
     slack_signing_secret: String,
 }
 
@@ -49,10 +53,11 @@ pub struct ChatGptQuery {
 }
 
 #[derive(Serialize, Debug)]
-struct ChatGptReqBody {
+pub struct ChatGptReqBody {
     messages: Vec<ChatGptQuery>,
     model: String,
     temperature: f32,
+    stream: bool,
     // max_tokens: i32,
     // top_p: f32,
     // n: i32,
@@ -61,13 +66,26 @@ struct ChatGptReqBody {
     // stop: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct ChatGptChoice {
-    message: ChatGptQuery,
+#[derive(Deserialize, Debug, Clone, Default)]
+struct ChatGptContent {
+    content: String,
 }
 
-#[derive(Deserialize)]
-struct ChatGptResBody {
+#[derive(Deserialize, Debug, Clone, Default)]
+struct ChatGptChoice {
+    // index: i32,
+    // finish_reason: Option<String>,
+    // logprobs: Option<Value>,
+    delta: Option<ChatGptContent>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct ChatGptResBody {
+    // id: String,
+    // object: String,
+    // model: String,
+    // created: i32,
+    // system_fingerprint: String,
     choices: Vec<ChatGptChoice>,
 }
 
@@ -91,7 +109,7 @@ async fn fetch_messages_in_channel(
     let env_args = match envy::from_env::<Env>() {
         Ok(val) => val,
         Err(err) => {
-            println!("{}", err);
+            println!("fetch_messages_in_channel err: {}", err);
             process::exit(1);
         }
     };
@@ -136,7 +154,7 @@ async fn fetch_replies(
     let env_args = match envy::from_env::<Env>() {
         Ok(val) => val,
         Err(err) => {
-            println!("{}", err);
+            println!("fetch_replies err: {}", err);
             process::exit(1);
         }
     };
@@ -252,15 +270,19 @@ async fn create_request_body_for_chat_gpt(
     let env_args = match envy::from_env::<Env>() {
         Ok(val) => val,
         Err(err) => {
-            println!("{}", err);
+            println!("create_request_body_for_chat_gpt err:{}", err);
             process::exit(1);
         }
     };
     let bot_menber_id = parameters.bot_member_id.clone();
     let messages_asked_to_bot = fetch_contexts(trigger_message, parameters).await?;
+    if messages_asked_to_bot.len() == 0 {
+        return Err("messages_asked_to_bot is empty".into());
+    }
 
     let mut messages =
         parse_slack_messages_to_chat_gpt_queries(messages_asked_to_bot, &bot_menber_id);
+
     let system_message = ChatGptQuery {
         role: Role::System,
         content: CHAT_GPT_SYSTEM_PROMPT.to_string(),
@@ -273,146 +295,116 @@ async fn create_request_body_for_chat_gpt(
         messages: messages,
         model: env_args.gpt_model,
         temperature: env_args.temperature,
+        stream: true,
     };
     return Ok(response);
 }
 
-// ChatGPTにリクエストを送る
-async fn fetch_chat_gpt_response(
-    trigger_message: SlackMessage,
-    parameters: Parameters,
-) -> Result<String, Box<dyn StdError>> {
-    let mut headers = header::HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-    headers.insert(
-        header::AUTHORIZATION,
-        format!("Bearer {}", parameters.openai_secret_key)
-            .parse()
-            .unwrap(),
-    );
-
-    let request_body = create_request_body_for_chat_gpt(trigger_message, parameters).await?;
-    // systemメッセージのみの場合は終了
-    if request_body.messages.len() < 2 {
-        return Ok("".to_string());
-    }
-
-    let client = reqwest::Client::new();
-    let res = client
-        .post(CHAT_GPT_POST_URL)
-        .headers(headers)
-        .json(&request_body)
-        .send()
-        .await?;
-
-    match res.status().as_u16() {
-        200 => {
-            let body = res.text().await?;
-            let json: ChatGptResBody = serde_json::from_str(&body)?;
-            let choices = json.choices;
-            if choices.len() == 0 {
-                return Ok(EMPTY_MESSAGE.to_string());
-            }
-            let text = choices[0].message.content.clone();
-            if text == "" {
-                return Ok(EMPTY_MESSAGE.to_string());
-            }
-            return Ok(text);
-        }
-        429 => return Ok(USAGE_LIMIT_MESSAGE.to_string()),
-        _ => {
-            let body = res.text().await?;
-            println!("Error from ChatGPT: {}", body);
-            return Ok(ERROR_MESSAGE.to_string());
-        }
-    }
-}
-
-// Slackにメッセージを投稿する
-async fn post_slack_message(
-    channel_id: &str,
-    text: &str,
-    slack_auth_token: &str,
-    thread_ts: Option<&str>,
-) -> Result<(), Box<dyn StdError>> {
-    let mut headers = header::HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-    headers.insert(
-        header::AUTHORIZATION,
-        format!("Bearer {}", slack_auth_token).parse().unwrap(),
-    );
-
-    let json = serde_json::json!({
-        "channel": channel_id,
-        "text": text,
-        "thread_ts": thread_ts,
-    });
-
-    let client = reqwest::Client::new();
-    let res = client
-        .post(SLACK_POST_URL)
-        .headers(headers)
-        .json(&json)
-        .send()
-        .await?;
-    match res.status().as_u16() {
-        200 => {
-            return Ok(());
-        }
-        _ => {
-            return Err(format!("Error: {}", res.status()).into());
-        }
-    }
-}
-
 // Slackイベントに応じて処理
-async fn handle_slack_event(slack_event: SlackEvent, parameters: Parameters) -> () {
+async fn handle_slack_event(
+    slack_event: SlackEvent,
+    parameters: Parameters,
+) -> Result<(), Box<dyn StdError>> {
     // event_callback以外は無視する
     if slack_event.type_name.as_str() != "event_callback" {
-        return ();
+        return Ok(());
     }
 
     let trigger_message = slack_event.event.unwrap();
     // 反応不要のメッセージの場合は終了
     if !trigger_message.reply_required(&parameters.bot_member_id) {
-        return ();
+        return Ok(());
     }
 
     let channel = match trigger_message.channel.clone() {
         Some(val) => val,
         None => {
             println!("channel is none. trigger_message: {:?}", trigger_message);
-            return ();
+            return Ok(());
         }
     };
     let thread_ts = trigger_message.new_message_thread_ts();
 
-    let slack_auth_token = &parameters.slack_auth_token.clone();
-    // ChatGPTの回答を取得する
-    let response_text = fetch_chat_gpt_response(trigger_message, parameters)
-        .await
-        .unwrap_or(ERROR_MESSAGE.to_string());
-    // 空文字(botへのメッセージなし)の場合は終了
-    if response_text == "" {
-        return ();
+    // TODO: 効率的にcloneする
+    let trigger_message_clone = trigger_message.clone();
+    let parameters_clone = parameters.clone();
+
+    let request_body =
+        create_request_body_for_chat_gpt(trigger_message_clone, parameters_clone).await?;
+
+    let api_client = ApiClient::new(&parameters, &channel);
+
+    // Slackに初期値を投稿する
+    // NOTE: fetch_contextsの後でないと無視する場合が排除できないためここで実行
+    let bot_message_ts = api_client
+        .post_message(&channel, LOADING_EMOJI, thread_ts.as_deref())
+        .await?;
+
+    // ChatGPTからのresponseを取得
+    let res = api_client
+        .get_chat_gpt_response(request_body, &bot_message_ts)
+        .await?;
+
+    let mut stream = res.bytes_stream();
+
+    let mut last_update = Instant::now() - Duration::from_secs(1);
+    let mut text = String::new();
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(chunk) => {
+                let chunk_str = String::from_utf8_lossy(&chunk);
+                for p in chunk_str.split("\n\n") {
+                    match p.strip_prefix("data: ") {
+                        Some(p) => {
+                            if p == "[DONE]" {
+                                break;
+                            }
+
+                            let json: ChatGptResBody = match serde_json::from_str(p) {
+                                Ok(val) => val,
+                                Err(_) => continue,
+                            };
+
+                            let content = match json.choices.get(0) {
+                                Some(choice) => match &choice.delta {
+                                    Some(delta) => &delta.content,
+                                    None => continue,
+                                },
+                                None => continue,
+                            };
+
+                            if content.len() > 0 {
+                                // 初期値を削除する
+                                if let Some(stripped) = text.strip_suffix(LOADING_EMOJI) {
+                                    text = stripped.to_string();
+                                }
+
+                                text.push_str(content);
+                                // NOTE: 1秒に1回更新する
+                                if last_update.elapsed() > Duration::from_millis(1000) {
+                                    last_update = Instant::now();
+                                    api_client
+                                        .update_message(text.as_str(), bot_message_ts.as_str())
+                                        .await?;
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Error from ChatGPT: {}", e);
+            }
+        }
     }
 
-    // SlackにChatGPTの回答を送る
-    let post = post_slack_message(
-        &channel,
-        &response_text,
-        slack_auth_token,
-        thread_ts.as_deref(),
-    )
-    .await;
-
-    return match post {
-        Ok(_) => (),
-        Err(e) => {
-            println!("Error: {}", e);
-            ()
-        }
-    };
+    // 終了を表す絵文字をつけて更新する
+    api_client
+        .update_message(text.add(FINISH_EMOJI).as_str(), bot_message_ts.as_str())
+        .await?;
+    Ok(())
 }
 
 // https://api.slack.com/authentication/verifying-requests-from-slack
@@ -451,7 +443,7 @@ async fn get_parameters() -> Result<Parameters, Error> {
     let env_args = match envy::from_env::<Env>() {
         Ok(val) => val,
         Err(err) => {
-            println!("{}", err);
+            println!("get_parameters error: {}", err);
             process::exit(1);
         }
     };
@@ -510,7 +502,11 @@ pub async fn handle_request(event: Request) -> String {
 
     // TODO: responseを返しつつ別のlambda関数で非同期に処理する
     // task::spawn(async move { handle_slack_event(slack_event, parameters).await });
-    handle_slack_event(slack_event, parameters).await;
+    handle_slack_event(slack_event, parameters)
+        .await
+        .unwrap_or_else(|e| {
+            println!("Error: {}", e);
+        });
 
     "OK".to_string()
 }

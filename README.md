@@ -15,7 +15,6 @@
 
 - ロジックの切り出し、リファクタリング
 - 即座に 200 OK を返しつつ、別の lambda 関数を呼び出し非同期に処理する
-- ChatGPT の応答を streaming 投稿する
 
 ## 参考にさせていただきました
 
@@ -23,6 +22,8 @@
   https://zenn.dev/lclco/articles/712d482d07e18c
 - Azure Functions と ChatGPT API で作った Slack Bot をコンテキスト対応しました
   https://zenn.dev/jtechjapan/articles/3579c91093c833
+- ChatGPT API の Slack ボットに 1 言ずつ喋らせる。
+  https://qiita.com/Cartelet/items/f64787cd0ae57c0a6830
 
 #### Official Documents
 

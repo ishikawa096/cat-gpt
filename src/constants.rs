@@ -1,6 +1,7 @@
 // URLs
 pub const CHAT_GPT_POST_URL: &str = "https://api.openai.com/v1/chat/completions";
 pub const SLACK_POST_URL: &str = "https://slack.com/api/chat.postMessage";
+pub const SLACK_UPDATE_URL: &str = "https://slack.com/api/chat.update";
 pub const SLACK_GET_REPLIES_URL: &str = "https://slack.com/api/conversations.replies";
 pub const SLACK_GET_HISTORY_URL: &str = "https://slack.com/api/conversations.history";
 
@@ -9,6 +10,10 @@ pub const ERROR_MESSAGE: &str = "エラーですにゃ。めんご。";
 pub const EMPTY_MESSAGE: &str =
     "OpenAIからの返答が空ですにゃ。調子が悪い可能性がありますにゃ。めんご。";
 pub const USAGE_LIMIT_MESSAGE: &str = "OpenAIの使用制限に達しましたにゃ。また後でよろしくにゃ。";
+
+// emoji
+pub const LOADING_EMOJI: &str = ":loading:";
+pub const FINISH_EMOJI: &str = ":paw_prints:";
 
 // ChatGPTへの指示プロンプト
 pub const CHAT_GPT_SYSTEM_PROMPT: &str = "You are an friendly Cat AI assistant. \
