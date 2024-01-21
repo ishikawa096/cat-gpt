@@ -71,7 +71,7 @@ impl SlackMessage {
             // DMかつスレッド外の場合はリプライにしない = thread_ts無し
             None
         } else {
-            // DM以外かつスレッド外の場合はスレッドを作る
+            // DM以外かつスレッド外の場合は自身のts(新規スレッドを作る)
             Some(self.ts.clone())
         }
     }
@@ -80,4 +80,19 @@ impl SlackMessage {
         // typeがメッセージで、subtypeがなく、Bot自身のメッセージでない場合、処理を続行する
         self.type_name == "message" && self.subtype.is_none() && !self.is_from(bot_id)
     }
+}
+
+#[test]
+fn test_text_without_mention_string() {
+    let message = SlackMessage {
+        text: "<@U01J9QZQZ9Z> こんにちは".to_string(),
+        thread_ts: None,
+        type_name: "message".to_string(),
+        subtype: None,
+        user: "U01J9QZQZ9Z".to_string(),
+        channel: Some("D024BE91L".to_string()),
+        ts: "1627777777.000000".to_string(),
+        channel_type: None,
+    };
+    assert_eq!(message.text_without_mention_string(), "こんにちは");
 }
