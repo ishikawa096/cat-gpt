@@ -1,4 +1,5 @@
-use super::handle_request::{ChatGptReqBody, Parameters};
+use super::handle_request::{ChatGptReqBody, Parameters, SlackHistoryResponse};
+use super::slack_message::SlackMessage;
 use crate::constants::*;
 use reqwest::{header, Client};
 use serde_json::Value;
@@ -99,61 +100,58 @@ impl ApiClient {
         Ok(())
     }
 
-    // // slackのメッセージに対する返信を取得する
-    // pub async fn get_replies(
-    //     &self,
-    //     ts: &str,
-    // ) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
-    //     let mut form = HashMap::new();
-    //     form.insert("channel", &self.channel);
-    //     form.insert("ts", ts);
-    //     let res = self
-    //         .client
-    //         .post(SLACK_GET_REPLIES_URL)
-    //         .headers(self.headers_for_slack())
-    //         .form(&form)
-    //         .send()
-    //         .await?;
-    //     let res_text = res.text().await?;
-    //     let res_json: Value = serde_json::from_str(&res_text)?;
-    //     if res_json["ok"] != true {
-    //         return Err(format!("Slack get replies error: {}", res_text).into());
-    //     }
-    //     let messages: Vec<SlackMessage> = serde_json::from_value(res_json["messages"].clone())?;
-    //     Ok(messages)
-    // }
+    // スレッド内のメッセージを取得する
+    pub async fn get_replies(
+        &self,
+        thread_ts: &str,
+        limit: &str,
+    ) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
+        let query = &[
+            ("limit", limit),
+            ("channel", self.channel.as_str()),
+            ("ts", thread_ts),
+        ];
 
-    // // slackのメッセージ履歴を取得する
-    // pub async fn get_history(
-    //     &self,
-    //     latest: Option<&str>,
-    //     oldest: Option<&str>,
-    // ) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
-    //     let mut form = HashMap::new();
-    //     form.insert("channel", &self.channel);
-    //     if let Some(latest) = latest {
-    //         form.insert("latest", latest);
-    //     }
-    //     if let Some(oldest) = oldest {
-    //         form.insert("oldest", oldest);
-    //     }
-    //     let res = self
-    //         .client
-    //         .post(SLACK_GET_HISTORY_URL)
-    //         .headers(self.headers_for_slack())
-    //         .form(&form)
-    //         .send()
-    //         .await?;
-    //     let res_text = res.text().await?;
-    //     let res_json: Value = serde_json::from_str(&res_text)?;
-    //     if res_json["ok"] != true {
-    //         return Err(format!("Slack get history error: {}", res_text).into());
-    //     }
-    //     let messages: Vec<SlackMessage> = serde_json::from_value(res_json["messages"].clone())?;
-    //     Ok(messages)
-    // }
+        let client = reqwest::Client::new();
+        let res = client
+            .get(SLACK_GET_REPLIES_URL)
+            .headers(self.headers_for_slack())
+            .query(query)
+            .send()
+            .await?;
 
-    // // ChatGPTにメッセージを投げて返答を取得する
+        // エラーハンドリング
+        if !res.status().is_success() {
+            return Err(format!("Error: {}", res.status()).into());
+        }
+
+        let body = res.text().await?;
+        let json: SlackHistoryResponse = serde_json::from_str(&body)?;
+        return Ok(json.messages);
+    }
+
+    // チャンネル内のメッセージを取得する
+    pub async fn get_history(&self, limit: &str) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
+        let query = &[("limit", limit), ("channel", self.channel.as_str())];
+        let res = self
+            .client
+            .get(SLACK_GET_HISTORY_URL)
+            .headers(self.headers_for_slack())
+            .query(query)
+            .send()
+            .await?;
+
+        // エラーハンドリング
+        if !res.status().is_success() {
+            return Err(format!("Error: {}", res.status()).into());
+        }
+
+        let body = res.text().await?;
+        let json: SlackHistoryResponse = serde_json::from_str(&body)?;
+        return Ok(json.messages);
+    }
+
+    // ChatGPTにメッセージを投げて返答を取得する
     pub async fn get_chat_gpt_response(
         &self,
         request_body: ChatGptReqBody,

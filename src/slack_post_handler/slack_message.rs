@@ -42,11 +42,41 @@ impl SlackMessage {
         self.user == user_id
     }
 
-    // メンション文字列を削除したメッセージ本文
-    pub fn text_without_mention_string(&self) -> String {
+    // メンション文字列とコマンドを削除したメッセージ本文
+    pub fn pure_text(&self) -> String {
+        // メンション文字列
         let re = Regex::new(r"^<.+> ").unwrap();
-        let result = re.replace(&self.text, "");
-        result.into_owned()
+        // past(数字)(過去のメッセージを参照するコマンド)
+        let command_re = Regex::new(r"^past(\d+)").unwrap();
+        let result = re.replace(&self.text, "").to_string();
+        command_re.replace(&result, "").trim().to_string()
+    }
+
+    // past(数字)コマンドの数字を取得する
+    pub fn get_limit(&self, default: i32, max_past: i32) -> i32 {
+        let re: Regex = Regex::new(r"^past(\d+)").unwrap();
+        let past = re
+            .captures(&self.text)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string());
+
+        let past_num = match past {
+            Some(past) => match past.parse::<i32>() {
+                Ok(num) => {
+                    if num > max_past {
+                        max_past
+                    } else if num < 0 {
+                        0
+                    } else {
+                        num
+                    }
+                }
+                Err(_) => default,
+            },
+            None => default,
+        };
+        // 最新のメッセージの分を+1する
+        past_num + 1
     }
 
     // SlackメッセージをChatGPTのクエリメッセージ形式に変換する
@@ -58,7 +88,7 @@ impl SlackMessage {
         };
         ChatGptQuery {
             role: role,
-            content: self.text_without_mention_string(),
+            content: self.pure_text(),
         }
     }
 
@@ -83,9 +113,9 @@ impl SlackMessage {
 }
 
 #[test]
-fn test_text_without_mention_string() {
+fn test_pure_text() {
     let message = SlackMessage {
-        text: "<@U01J9QZQZ9Z> こんにちは".to_string(),
+        text: "<@U01J9QZQZ9Z> <@U01YH89HJ2K> past10こんにちはpast3".to_string(),
         thread_ts: None,
         type_name: "message".to_string(),
         subtype: None,
@@ -94,5 +124,20 @@ fn test_text_without_mention_string() {
         ts: "1627777777.000000".to_string(),
         channel_type: None,
     };
-    assert_eq!(message.text_without_mention_string(), "こんにちは");
+    assert_eq!(message.pure_text(), "こんにちはpast3");
+}
+
+#[test]
+fn test_get_limit() {
+    let message = SlackMessage {
+        text: "past10\nこんにちはpast0".to_string(),
+        thread_ts: None,
+        type_name: "message".to_string(),
+        subtype: None,
+        user: "U01J9QZQZ9Z".to_string(),
+        channel: Some("D024BE91L".to_string()),
+        ts: "1627777777.000000".to_string(),
+        channel_type: None,
+    };
+    assert_eq!(message.get_limit(5, 10), 11);
 }

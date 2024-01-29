@@ -24,8 +24,9 @@ Resources:
         Variables:
           parameter_store_name: cat-gpt-slack-bot
           gpt_model: gpt-4-1106-preview
-          messages_fetch_limit: 10
           temperature: 0.3
+          default_past_num: 6
+          max_past_num: 10
       FunctionUrlConfig:
         AuthType: NONE
         InvokeMode: BUFFERED
