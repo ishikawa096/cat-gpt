@@ -8,7 +8,9 @@ use sha2::Sha256;
 use std::time::{Duration, Instant};
 use std::{error::Error as StdError, process};
 
-use crate::constants::{CHAT_GPT_SYSTEM_PROMPT, LOADING_EMOJI};
+use crate::constants::{
+    CHAT_GPT_SYSTEM_PROMPT, ERROR_FROM_OPEN_AI_MESSAGE, LOADING_EMOJI, NO_CONTEXTS_MESSAGE,
+};
 use crate::slack_post_handler::api_client::ApiClient;
 use crate::slack_post_handler::slack_message::SlackMessage;
 
@@ -195,6 +197,14 @@ async fn create_request_body_for_chat_gpt(
     let bot_menber_id = parameters.bot_member_id.clone();
     let contexts = fetch_contexts(trigger_message, parameters).await?;
     if contexts.len() == 0 {
+        // NOTE: contextsが空の場合はエラーを投稿する
+        ApiClient::new(&parameters, &trigger_message.channel.clone().unwrap())
+            .post_message(
+                trigger_message.channel.clone().unwrap().as_str(),
+                NO_CONTEXTS_MESSAGE,
+                trigger_message.new_message_thread_ts().as_deref(),
+            )
+            .await?;
         return Err("contexts is empty".into());
     }
 
@@ -321,6 +331,11 @@ async fn handle_slack_event(
     if last_post_text != text {
         api_client
             .update_message(text.as_str(), bot_message_ts.as_str())
+            .await?;
+    } else if text == "" {
+        // 何も返答がなかった場合はエラーを投稿する
+        api_client
+            .update_message(ERROR_FROM_OPEN_AI_MESSAGE, bot_message_ts.as_str())
             .await?;
     }
     Ok(())

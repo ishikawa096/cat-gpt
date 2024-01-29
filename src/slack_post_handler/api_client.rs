@@ -173,6 +173,7 @@ impl ApiClient {
             }
             _ => {
                 let body = res.text().await?;
+                self.update_message(ERROR_FROM_OPEN_AI_MESSAGE, ts).await?;
                 println!("Error from ChatGPT: {}", body);
                 return Err("error from chatgpt".into());
             }
