@@ -280,7 +280,7 @@ async fn handle_slack_event(
         match item {
             Ok(chunk) => {
                 let chunk_str = String::from_utf8_lossy(&chunk);
-                for p in chunk_str.split("\n\n") {
+                for p in chunk_str.trim().split("\n\n") {
                     match p.strip_prefix("data: ") {
                         Some(p) => {
                             if p == "[DONE]" {
