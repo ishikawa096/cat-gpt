@@ -5,12 +5,17 @@ pub const SLACK_UPDATE_URL: &str = "https://slack.com/api/chat.update";
 pub const SLACK_GET_REPLIES_URL: &str = "https://slack.com/api/conversations.replies";
 pub const SLACK_GET_HISTORY_URL: &str = "https://slack.com/api/conversations.history";
 
+// ファイルタイプ
+pub const VALID_MIME_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
 // エラー時にSlackに投稿するメッセージ
 pub const ERROR_MESSAGE: &str = "エラーですにゃ。めんご。";
 pub const NO_CONTEXTS_MESSAGE: &str = "メッセージを受け取れませんでしたにゃ。めんご。";
 pub const ERROR_FROM_OPEN_AI_MESSAGE: &str =
     "OpenAIからエラーが返ってきましたにゃ。調子が悪い可能性がありますにゃ。めんご。";
 pub const USAGE_LIMIT_MESSAGE: &str = "OpenAIの使用制限に達しましたにゃ。また後でよろしくにゃ。";
+pub const INVALID_IMAGE_FORMAT: &str =
+    "対応していないファイル形式ですにゃ。20MB以下のpng,jpeg,gif,webpのいずれかでお願いにゃ。";
 
 // emoji
 pub const LOADING_EMOJI: &str = ":loading:";

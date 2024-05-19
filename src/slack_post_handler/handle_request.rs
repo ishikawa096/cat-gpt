@@ -9,10 +9,13 @@ use std::time::{Duration, Instant};
 use std::{error::Error as StdError, process};
 
 use crate::constants::{
-    CHAT_GPT_SYSTEM_PROMPT, ERROR_FROM_OPEN_AI_MESSAGE, LOADING_EMOJI, NO_CONTEXTS_MESSAGE,
+    ERROR_FROM_OPEN_AI_MESSAGE, INVALID_IMAGE_FORMAT, LOADING_EMOJI, NO_CONTEXTS_MESSAGE,
+    VALID_MIME_TYPES,
 };
 use crate::slack_post_handler::api_client::ApiClient;
 use crate::slack_post_handler::slack_message::SlackMessage;
+
+use super::chat_gpt_query::ChatGptQuery;
 
 #[derive(Deserialize)]
 pub struct Env {
@@ -34,20 +37,6 @@ pub struct Parameters {
 #[derive(Deserialize)]
 pub struct SlackHistoryResponse {
     pub messages: Vec<SlackMessage>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "snake_case")]
-pub enum Role {
-    Assistant,
-    User,
-    System,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct ChatGptQuery {
-    pub role: Role,
-    pub content: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -122,6 +111,26 @@ fn order_by_ts(messages: Vec<SlackMessage>) -> Vec<SlackMessage> {
     return sorted_messages;
 }
 
+// 最新メッセージ以外のメッセージの画像を空にする
+fn delete_old_files(messages: Vec<SlackMessage>, latest_ts: &str) -> Vec<SlackMessage> {
+    // メッセージにファイルが含まれていない場合そのまま
+    if !messages.iter().any(|m| m.files.is_some()) {
+        return messages;
+    }
+
+    messages
+        .into_iter()
+        .map(|m| {
+            if m.ts == latest_ts {
+                return m;
+            }
+            let mut new_m = m.clone();
+            new_m.files = None;
+            new_m
+        })
+        .collect()
+}
+
 async fn fetch_contexts(
     trigger_message: &SlackMessage,
     parameters: &Parameters,
@@ -179,22 +188,11 @@ async fn fetch_contexts(
     return Ok(vec![]);
 }
 
-// SlackメッセージをChatGPTのクエリメッセージ形式に変換する
-fn parse_slack_messages_to_chat_gpt_queries(
-    messages: Vec<SlackMessage>,
-    bot_member_id: &str,
-) -> Vec<ChatGptQuery> {
-    messages
-        .into_iter()
-        .map(|m| m.to_chat_gpt_query(bot_member_id))
-        .collect()
-}
-
 async fn create_request_body_for_chat_gpt(
     trigger_message: &SlackMessage,
     parameters: &Parameters,
 ) -> Result<ChatGptReqBody, Box<dyn StdError>> {
-    let bot_menber_id = parameters.bot_member_id.clone();
+    let bot_member_id = parameters.bot_member_id.clone();
     let contexts = fetch_contexts(trigger_message, parameters).await?;
     if contexts.len() == 0 {
         // NOTE: contextsが空の場合はエラーを投稿する
@@ -208,15 +206,19 @@ async fn create_request_body_for_chat_gpt(
         return Err("contexts is empty".into());
     }
 
+    // 最新メッセージ以外のメッセージの画像を空にする
+    let contexts_with_new_files_only = delete_old_files(contexts, &trigger_message.ts);
+
     // system prompt
-    let mut messages = vec![ChatGptQuery {
-        role: Role::System,
-        content: CHAT_GPT_SYSTEM_PROMPT.to_string(),
-    }];
+    let mut messages = vec![ChatGptQuery::new_system_prompt()];
 
-    let parsed_messages =
-        parse_slack_messages_to_chat_gpt_queries(order_by_ts(contexts), &bot_menber_id);
-
+    let parsed_messages = ChatGptQuery::new_from_slack_messages(
+        order_by_ts(contexts_with_new_files_only),
+        &bot_member_id,
+        &parameters.slack_auth_token,
+    )
+    .await;
+    println!("parsed_messages: {:?}", parsed_messages);
     // system promptの後にmessagesを追加する
     messages.extend(parsed_messages);
 
@@ -235,6 +237,8 @@ async fn handle_slack_event(
     slack_event: SlackEvent,
     parameters: Parameters,
 ) -> Result<(), Box<dyn StdError>> {
+    // println!("slack_event: {:?}", slack_event);
+
     // event_callback以外は無視する
     if slack_event.type_name.as_str() != "event_callback" {
         return Ok(());
@@ -264,6 +268,21 @@ async fn handle_slack_event(
     let bot_message_ts = api_client
         .post_message(&channel, LOADING_EMOJI, thread_ts.as_deref())
         .await?;
+
+    // 画像バリデーション
+    if let Some(files) = &trigger_message.files {
+        for file in files {
+            if !VALID_MIME_TYPES
+                .iter()
+                .any(|&i| i == file.mimetype.as_str())
+            {
+                api_client
+                    .update_message(INVALID_IMAGE_FORMAT, bot_message_ts.as_str())
+                    .await?;
+                return Ok(());
+            }
+        }
+    }
 
     // ChatGPTからのresponseを取得
     let res = api_client
@@ -322,7 +341,8 @@ async fn handle_slack_event(
                 }
             }
             Err(e) => {
-                println!("Error from ChatGPT: {}", e);
+                println!("Error from ChatGPT stream: {}", e);
+                // println!("last_post_text: {}", last_post_text);
             }
         }
     }
@@ -395,6 +415,7 @@ async fn get_parameters() -> Result<Parameters, Error> {
 }
 
 pub async fn handle_request(event: Request) -> String {
+    // println!("event: {:?}", event);
     let body_str = match event.body() {
         Body::Text(s) => s,
         _ => "",

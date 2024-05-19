@@ -171,6 +171,17 @@ impl ApiClient {
                 self.update_message(USAGE_LIMIT_MESSAGE, ts).await?;
                 return Err("ChatGPT usage limit".into());
             }
+            400 => {
+                let body = res.text().await?;
+                if body.contains("invalid_image_format") {
+                    self.update_message(INVALID_IMAGE_FORMAT, ts).await?;
+                } else {
+                    self.update_message(ERROR_FROM_OPEN_AI_MESSAGE, ts).await?;
+                }
+                println!("Error from ChatGPT: {}", body);
+                // println!("request body: {}", json!(request_body));
+                return Err("error from chatgpt".into());
+            }
             _ => {
                 let body = res.text().await?;
                 self.update_message(ERROR_FROM_OPEN_AI_MESSAGE, ts).await?;

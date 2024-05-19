@@ -1,4 +1,3 @@
-use super::handle_request::{ChatGptQuery, Role};
 use regex::Regex;
 use serde_derive::Deserialize;
 
@@ -14,6 +13,14 @@ pub struct SlackMessage {
     pub channel: Option<String>,
     pub ts: String,
     pub channel_type: Option<String>,
+    pub files: Option<Vec<SharedFile>>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct SharedFile {
+    pub filetype: String,
+    pub mimetype: String,
+    pub url_private: String,
 }
 
 impl SlackMessage {
@@ -79,19 +86,6 @@ impl SlackMessage {
         past_num + 1
     }
 
-    // SlackメッセージをChatGPTのクエリメッセージ形式に変換する
-    pub fn to_chat_gpt_query(&self, bot_id: &str) -> ChatGptQuery {
-        let role = if self.is_from(bot_id) {
-            Role::Assistant
-        } else {
-            Role::User
-        };
-        ChatGptQuery {
-            role: role,
-            content: self.pure_text(),
-        }
-    }
-
     // 新規メッセージのthread_tsを決定する
     pub fn new_message_thread_ts(&self) -> Option<String> {
         if self.is_in_thread() {
@@ -107,8 +101,13 @@ impl SlackMessage {
     }
 
     pub fn reply_required(&self, bot_id: &str) -> bool {
-        // typeがメッセージで、subtypeがなく、Bot自身のメッセージでない場合、処理を続行する
-        self.type_name == "message" && self.subtype.is_none() && !self.is_from(bot_id)
+        // typeがメッセージで、subtype無しかfile_share、Bot自身のメッセージでない場合、処理を続行する
+        let is_message_type = self.type_name == "message";
+        let is_file_share_or_no_subtype =
+            self.subtype.is_none() || self.subtype.as_ref().is_some_and(|s| s == "file_share");
+        let is_not_from_bot = !self.is_from(bot_id);
+
+        is_message_type && is_file_share_or_no_subtype && is_not_from_bot
     }
 }
 
@@ -123,6 +122,7 @@ fn test_pure_text() {
         channel: Some("D024BE91L".to_string()),
         ts: "1627777777.000000".to_string(),
         channel_type: None,
+        files: None,
     };
     assert_eq!(message.pure_text(), "こんにちはpast3");
 }
@@ -138,6 +138,7 @@ fn test_get_limit() {
         channel: Some("D024BE91L".to_string()),
         ts: "1627777777.000000".to_string(),
         channel_type: None,
+        files: None,
     };
     assert_eq!(message.get_limit(5, 10), 11);
 }
