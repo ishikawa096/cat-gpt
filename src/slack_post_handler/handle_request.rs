@@ -294,12 +294,14 @@ async fn handle_slack_event(
     let mut last_update = Instant::now() - Duration::from_secs(1);
     let mut text = String::new();
     let mut last_post_text = String::new();
+    // 途切れた文字列を保持する
+    let mut partial_str = String::new();
 
     while let Some(item) = stream.next().await {
         match item {
             Ok(chunk) => {
                 let chunk_str = String::from_utf8_lossy(&chunk);
-                for p in chunk_str.trim().split("\n\n") {
+                for p in chunk_str.split("\n\n") {
                     match p.strip_prefix("data: ") {
                         Some(p) => {
                             if p == "[DONE]" {
@@ -308,7 +310,11 @@ async fn handle_slack_event(
 
                             let json: ChatGptResBody = match serde_json::from_str(p) {
                                 Ok(val) => val,
-                                Err(_) => continue,
+                                // 途切れた文字列として一旦保持する
+                                Err(_) => {
+                                    partial_str = p.to_string();
+                                    continue;
+                                }
                             };
 
                             let content = match json.choices.get(0) {
@@ -336,7 +342,47 @@ async fn handle_slack_event(
                                 }
                             }
                         }
-                        None => {}
+                        None => {
+                            // 前回途切れた文字列に結合する
+                            partial_str.push_str(p);
+                            //jsonに変換できるか確認する
+                            match serde_json::from_str(partial_str.as_str()) {
+                                Ok(val) => {
+                                    let json: ChatGptResBody = val;
+                                    let content = match json.choices.get(0) {
+                                        Some(choice) => match &choice.delta {
+                                            Some(delta) => &delta.content,
+                                            None => continue,
+                                        },
+                                        None => continue,
+                                    };
+                                    if content.len() > 0 {
+                                        // 初期値を削除する
+                                        if let Some(stripped) = text.strip_suffix(LOADING_EMOJI) {
+                                            text = stripped.to_string();
+                                        }
+
+                                        text.push_str(content);
+                                        // NOTE: 1秒に1回更新する
+                                        if last_update.elapsed() > Duration::from_millis(1000) {
+                                            last_update = Instant::now();
+                                            last_post_text = text.clone();
+                                            api_client
+                                                .update_message(
+                                                    text.as_str(),
+                                                    bot_message_ts.as_str(),
+                                                )
+                                                .await?;
+                                        }
+                                    }
+                                    partial_str = String::new();
+                                }
+                                Err(_) => {
+                                    // jsonに変換できない場合は次のchunkを待つ
+                                    continue;
+                                }
+                            }
+                        }
                     }
                 }
             }
