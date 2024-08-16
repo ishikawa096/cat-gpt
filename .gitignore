@@ -1,3 +1,6 @@
-/target
+.DS_Store
+
+debug/
+target/
 .env
 .aws-sam
