@@ -1,6 +1,11 @@
 # CatGPT
 
-- chatbot for slack
+- ネコ型のパーソナリティを持ったSlackBotです。
+- メッセージを送信するとOpenAPIを用いて応答を生成し返答します。
+https://github.com/user-attachments/assets/10dfde0e-2a74-40c5-b64d-40561a38fc22
+
+- インフラ構成や運用についての参考スライド
+  - https://speakerdeck.com/ishikawa096/chatgpt-x-aws-lambdatezuo-ruslack-bot
 
 ## Build
 
