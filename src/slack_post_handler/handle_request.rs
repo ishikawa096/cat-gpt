@@ -1,9 +1,7 @@
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_ssm::Client;
-use hmac::{Hmac, Mac};
-use lambda_http::{http::HeaderMap, Body, Error, Request};
+use lambda_http::{Body, Error, Request};
 use serde_derive::{Deserialize, Serialize};
-use sha2::Sha256;
 use std::{error::Error as StdError, process};
 
 use crate::constants::{
@@ -14,6 +12,7 @@ use crate::slack_post_handler::slack_message::SlackMessage;
 
 use super::chat_gpt_query::ChatGptQuery;
 use super::handle_chat_gpt_response::handle_chat_gpt_response;
+use super::validate_slack_signature::validate_slack_signature;
 
 #[derive(Deserialize)]
 pub struct Env {
@@ -57,11 +56,6 @@ struct SlackEvent {
     type_name: String,
     event: Option<SlackMessage>,
     challenge: Option<String>,
-}
-
-struct RequestData {
-    headers: HeaderMap,
-    body: String,
 }
 
 fn get_enviroment_variable() -> Env {
@@ -268,37 +262,6 @@ async fn handle_slack_event(
     handle_chat_gpt_response(res, api_client, bot_message_ts.as_str()).await
 }
 
-// https://api.slack.com/authentication/verifying-requests-from-slack
-fn validate_signature(event: RequestData, slack_signing_secret: &str) -> bool {
-    type HmacSha256 = Hmac<Sha256>;
-    let signature_header = "X-Slack-Signature";
-    let timestamp_header = "X-Slack-Request-Timestamp";
-
-    let signature = event
-        .headers
-        .get(signature_header)
-        .expect(format!("{} missing", signature_header).as_str())
-        .to_str()
-        .expect(format!("{} parse error", signature_header).as_str());
-    let timestamp = event
-        .headers
-        .get(timestamp_header)
-        .expect(format!("{} missing", timestamp_header).as_str())
-        .to_str()
-        .expect(format!("{} parse error", timestamp_header).as_str());
-    let basestring = format!("v0:{}:{}", timestamp, event.body);
-
-    // Slack Signing SecretをkeyとしてbasestringをHMAC SHA256でhashにする
-    let mut mac = HmacSha256::new_from_slice(slack_signing_secret.as_bytes())
-        .expect("Invalid Slack Signing Secret");
-    mac.update(basestring.as_bytes());
-    let expected_signature = mac.finalize();
-
-    // expected_signatureとsignatureが一致するか確認する
-    let expected_signature_str = hex::encode(expected_signature.into_bytes());
-    return format!("v0={}", expected_signature_str) == signature;
-}
-
 // ParameterStoreのパラメータを取得する
 async fn get_parameters() -> Result<Parameters, Error> {
     let shared_config = aws_config::defaults(BehaviorVersion::v2023_11_09())
@@ -327,19 +290,17 @@ pub async fn handle_request(event: Request) -> String {
         Body::Text(s) => s,
         _ => "",
     };
-
     let parameters = get_parameters().await.unwrap();
 
     // signatureの検証
-    if !validate_signature(
-        RequestData {
-            headers: event.headers().clone(),
-            body: body_str.to_string(),
-        },
+    if !validate_slack_signature(
+        event.headers(),
+        body_str,
         parameters.slack_signing_secret.as_str(),
     ) {
         return "NG".to_string();
     }
+
     // retryの場合は、OKを返して処理を終了する
     if event.headers().get("x-slack-retry-num").is_some() {
         return "OK".to_string();
