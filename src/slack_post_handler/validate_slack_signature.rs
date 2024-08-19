@@ -1,5 +1,5 @@
 use hmac::{Hmac, Mac};
-use lambda_http::http::HeaderMap;
+use lambda_http::http::header::HeaderMap;
 use sha2::Sha256;
 
 // https://api.slack.com/authentication/verifying-requests-from-slack
@@ -33,4 +33,35 @@ pub fn validate_slack_signature(
     // expected_signatureとsignatureが一致するか確認する
     let expected_signature_str = hex::encode(expected_signature.into_bytes());
     return format!("v0={}", expected_signature_str) == signature;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lambda_http::http::header::HeaderValue;
+
+    #[test]
+    fn test_validate_slack_signature() {
+        let headers = {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "X-Slack-Signature",
+                HeaderValue::from_static(
+                    "v0=32d48c53b8c4a93a2b3fc57d6b40b003650da2536b519015b670ac091eec00df",
+                ),
+            );
+            headers.insert(
+                "X-Slack-Request-Timestamp",
+                HeaderValue::from_static("1234567890"),
+            );
+            headers
+        };
+        let body = "test";
+        let slack_signing_secret = "1234567890abcdef1234567890abcdef";
+
+        assert_eq!(
+            validate_slack_signature(&headers, body, slack_signing_secret),
+            true
+        );
+    }
 }
