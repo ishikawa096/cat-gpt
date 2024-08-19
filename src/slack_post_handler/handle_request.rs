@@ -1,21 +1,18 @@
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_ssm::Client;
-use futures::StreamExt;
-use hmac::{Hmac, Mac};
-use lambda_http::{http::HeaderMap, Body, Error, Request};
+use lambda_http::{Body, Error, Request};
 use serde_derive::{Deserialize, Serialize};
-use sha2::Sha256;
-use std::time::{Duration, Instant};
 use std::{error::Error as StdError, process};
 
 use crate::constants::{
-    ERROR_FROM_OPEN_AI_MESSAGE, INVALID_IMAGE_FORMAT, LOADING_EMOJI, NO_CONTEXTS_MESSAGE,
-    VALID_MIME_TYPES,
+    INVALID_IMAGE_FORMAT, LOADING_EMOJI, NO_CONTEXTS_MESSAGE, VALID_MIME_TYPES,
 };
 use crate::slack_post_handler::api_client::ApiClient;
 use crate::slack_post_handler::slack_message::SlackMessage;
 
 use super::chat_gpt_query::ChatGptQuery;
+use super::handle_chat_gpt_response::handle_chat_gpt_response;
+use super::validate_slack_signature::validate_slack_signature;
 
 #[derive(Deserialize)]
 pub struct Env {
@@ -53,40 +50,12 @@ pub struct ChatGptReqBody {
     // stop: Vec<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
-struct ChatGptContent {
-    content: String,
-}
-
-#[derive(Deserialize, Debug, Clone, Default)]
-struct ChatGptChoice {
-    // index: i32,
-    // finish_reason: Option<String>,
-    // logprobs: Option<Value>,
-    delta: Option<ChatGptContent>,
-}
-
-#[derive(Deserialize, Debug, Clone, Default)]
-pub struct ChatGptResBody {
-    // id: String,
-    // object: String,
-    // model: String,
-    // created: i32,
-    // system_fingerprint: String,
-    choices: Vec<ChatGptChoice>,
-}
-
 #[derive(Deserialize, Debug)]
 struct SlackEvent {
     #[serde(rename = "type")]
     type_name: String,
     event: Option<SlackMessage>,
     challenge: Option<String>,
-}
-
-struct RequestData {
-    headers: HeaderMap,
-    body: String,
 }
 
 fn get_enviroment_variable() -> Env {
@@ -289,238 +258,8 @@ async fn handle_slack_event(
         .get_chat_gpt_response(request_body, &bot_message_ts)
         .await?;
 
-    let mut stream = res.bytes_stream();
-
-    let mut last_update = Instant::now() - Duration::from_secs(1);
-    let mut text = String::new();
-    let mut last_post_text = String::new();
-    // 途切れた文字列を保持する
-    let mut partial_str = String::new();
-    let mut partial_bytes: Vec<u8> = Vec::new();
-
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(chunk) => {
-                for line in chunk.split(|&c| c == b'\n') {
-                    match std::str::from_utf8(line) {
-                        Ok(p) => {
-                            match p.strip_prefix("data: ") {
-                                Some(p) => {
-                                    if p == "[DONE]" {
-                                        break;
-                                    }
-
-                                    let json: ChatGptResBody = match serde_json::from_str(p) {
-                                        Ok(val) => val,
-                                        // 途切れた文字列として一旦保持する
-                                        Err(_) => {
-                                            partial_str = "data: ".to_string() + p;
-                                            continue;
-                                        }
-                                    };
-
-                                    let content = match json.choices.get(0) {
-                                        Some(choice) => match &choice.delta {
-                                            Some(delta) => &delta.content,
-                                            None => continue,
-                                        },
-                                        None => continue,
-                                    };
-
-                                    if content.len() > 0 {
-                                        // 初期値を削除する
-                                        if let Some(stripped) = text.strip_suffix(LOADING_EMOJI) {
-                                            text = stripped.to_string();
-                                        }
-
-                                        text.push_str(content);
-                                        // NOTE: 1秒に1回更新する
-                                        if last_update.elapsed() > Duration::from_millis(1000) {
-                                            last_update = Instant::now();
-                                            last_post_text = text.clone();
-                                            api_client
-                                                .update_message(
-                                                    text.as_str(),
-                                                    bot_message_ts.as_str(),
-                                                )
-                                                .await?;
-                                        }
-                                    }
-                                }
-                                None => {
-                                    // 前回途切れた文字列に結合する
-                                    partial_str.push_str(p);
-                                    // 完全な文字列になったか確認する
-                                    match partial_str.strip_prefix("data: ") {
-                                        Some(ps) => {
-                                            if ps == "[DONE]" {
-                                                break;
-                                            }
-                                            match serde_json::from_str(ps) {
-                                                Ok(val) => {
-                                                    let json: ChatGptResBody = val;
-                                                    let content = match json.choices.get(0) {
-                                                        Some(choice) => match &choice.delta {
-                                                            Some(delta) => &delta.content,
-                                                            None => continue,
-                                                        },
-                                                        None => continue,
-                                                    };
-                                                    if content.len() > 0 {
-                                                        // 初期値を削除する
-                                                        if let Some(stripped) =
-                                                            text.strip_suffix(LOADING_EMOJI)
-                                                        {
-                                                            text = stripped.to_string();
-                                                        }
-
-                                                        text.push_str(content);
-                                                        // NOTE: 1秒に1回更新する
-                                                        if last_update.elapsed()
-                                                            > Duration::from_millis(1000)
-                                                        {
-                                                            last_update = Instant::now();
-                                                            last_post_text = text.clone();
-                                                            api_client
-                                                                .update_message(
-                                                                    text.as_str(),
-                                                                    bot_message_ts.as_str(),
-                                                                )
-                                                                .await?;
-                                                        }
-                                                    }
-                                                    partial_str = String::new();
-                                                }
-                                                Err(_) => {
-                                                    // jsonに変換できない場合は次のchunkを待つ
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                        None => {
-                                            // "data: "から始まっていない場合は次のchunkを待つ
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // UTF-8に変換できない場合はpartial_bytesに追加する
-                            partial_bytes.extend_from_slice(line);
-                            // 完全な文字列になったか確認する
-                            match std::str::from_utf8(&partial_bytes) {
-                                Ok(ps) => {
-                                    match ps.strip_prefix("data: ") {
-                                        Some(ps) => {
-                                            if ps == "[DONE]" {
-                                                break;
-                                            }
-                                            match serde_json::from_str(ps) {
-                                                Ok(val) => {
-                                                    let json: ChatGptResBody = val;
-                                                    let content = match json.choices.get(0) {
-                                                        Some(choice) => match &choice.delta {
-                                                            Some(delta) => &delta.content,
-                                                            None => continue,
-                                                        },
-                                                        None => continue,
-                                                    };
-                                                    if content.len() > 0 {
-                                                        // 初期値を削除する
-                                                        if let Some(stripped) =
-                                                            text.strip_suffix(LOADING_EMOJI)
-                                                        {
-                                                            text = stripped.to_string();
-                                                        }
-
-                                                        text.push_str(content);
-                                                        // NOTE: 1秒に1回更新する
-                                                        if last_update.elapsed()
-                                                            > Duration::from_millis(1000)
-                                                        {
-                                                            last_update = Instant::now();
-                                                            last_post_text = text.clone();
-                                                            api_client
-                                                                .update_message(
-                                                                    text.as_str(),
-                                                                    bot_message_ts.as_str(),
-                                                                )
-                                                                .await?;
-                                                        }
-                                                    }
-                                                    partial_bytes.clear();
-                                                }
-                                                Err(_) => {
-                                                    // jsonに変換できない場合は次のchunkを待つ
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                        None => {
-                                            // "data: "から始まっていない場合は次のchunkを待つ
-                                            continue;
-                                        }
-                                    }
-                                }
-                                Err(_) => {
-                                    // UTF-8に変換できない場合は次のchunkを待つ
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Error from ChatGPT stream: {}", e);
-            }
-        }
-    }
-
-    // 未投稿の文がある場合は更新する
-    if last_post_text != text {
-        api_client
-            .update_message(text.as_str(), bot_message_ts.as_str())
-            .await?;
-    } else if text == "" {
-        // 何も返答がなかった場合はエラーを投稿する
-        api_client
-            .update_message(ERROR_FROM_OPEN_AI_MESSAGE, bot_message_ts.as_str())
-            .await?;
-    }
-    Ok(())
-}
-
-// https://api.slack.com/authentication/verifying-requests-from-slack
-fn validate_signature(event: RequestData, slack_signing_secret: &str) -> bool {
-    type HmacSha256 = Hmac<Sha256>;
-    let signature_header = "X-Slack-Signature";
-    let timestamp_header = "X-Slack-Request-Timestamp";
-
-    let signature = event
-        .headers
-        .get(signature_header)
-        .expect(format!("{} missing", signature_header).as_str())
-        .to_str()
-        .expect(format!("{} parse error", signature_header).as_str());
-    let timestamp = event
-        .headers
-        .get(timestamp_header)
-        .expect(format!("{} missing", timestamp_header).as_str())
-        .to_str()
-        .expect(format!("{} parse error", timestamp_header).as_str());
-    let basestring = format!("v0:{}:{}", timestamp, event.body);
-
-    // Slack Signing SecretをkeyとしてbasestringをHMAC SHA256でhashにする
-    let mut mac = HmacSha256::new_from_slice(slack_signing_secret.as_bytes())
-        .expect("Invalid Slack Signing Secret");
-    mac.update(basestring.as_bytes());
-    let expected_signature = mac.finalize();
-
-    // expected_signatureとsignatureが一致するか確認する
-    let expected_signature_str = hex::encode(expected_signature.into_bytes());
-    return format!("v0={}", expected_signature_str) == signature;
+    // ストリームを処理
+    handle_chat_gpt_response(res, api_client, bot_message_ts.as_str()).await
 }
 
 // ParameterStoreのパラメータを取得する
@@ -551,19 +290,17 @@ pub async fn handle_request(event: Request) -> String {
         Body::Text(s) => s,
         _ => "",
     };
-
     let parameters = get_parameters().await.unwrap();
 
     // signatureの検証
-    if !validate_signature(
-        RequestData {
-            headers: event.headers().clone(),
-            body: body_str.to_string(),
-        },
+    if !validate_slack_signature(
+        event.headers(),
+        body_str,
         parameters.slack_signing_secret.as_str(),
     ) {
         return "NG".to_string();
     }
+
     // retryの場合は、OKを返して処理を終了する
     if event.headers().get("x-slack-retry-num").is_some() {
         return "OK".to_string();

@@ -111,34 +111,39 @@ impl SlackMessage {
     }
 }
 
-#[test]
-fn test_pure_text() {
-    let message = SlackMessage {
-        text: "<@U01J9QZQZ9Z> <@U01YH89HJ2K> past10こんにちはpast3".to_string(),
-        thread_ts: None,
-        type_name: "message".to_string(),
-        subtype: None,
-        user: "U01J9QZQZ9Z".to_string(),
-        channel: Some("D024BE91L".to_string()),
-        ts: "1627777777.000000".to_string(),
-        channel_type: None,
-        files: None,
-    };
-    assert_eq!(message.pure_text(), "こんにちはpast3");
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn test_get_limit() {
-    let message = SlackMessage {
-        text: "past10\nこんにちはpast0".to_string(),
-        thread_ts: None,
-        type_name: "message".to_string(),
-        subtype: None,
-        user: "U01J9QZQZ9Z".to_string(),
-        channel: Some("D024BE91L".to_string()),
-        ts: "1627777777.000000".to_string(),
-        channel_type: None,
-        files: None,
-    };
-    assert_eq!(message.get_limit(5, 10), 11);
+    #[test]
+    fn test_pure_text() {
+        let message = SlackMessage {
+            text: "<@U01J9QZQZ9Z> <@U01YH89HJ2K> past10こんにちはpast3".to_string(),
+            thread_ts: None,
+            type_name: "message".to_string(),
+            subtype: None,
+            user: "U01J9QZQZ9Z".to_string(),
+            channel: Some("D024BE91L".to_string()),
+            ts: "1627777777.000000".to_string(),
+            channel_type: None,
+            files: None,
+        };
+        assert_eq!(message.pure_text(), "こんにちはpast3");
+    }
+
+    #[test]
+    fn test_get_limit() {
+        let message = SlackMessage {
+            text: "past10\nこんにちはpast0".to_string(),
+            thread_ts: None,
+            type_name: "message".to_string(),
+            subtype: None,
+            user: "U01J9QZQZ9Z".to_string(),
+            channel: Some("D024BE91L".to_string()),
+            ts: "1627777777.000000".to_string(),
+            channel_type: None,
+            files: None,
+        };
+        assert_eq!(message.get_limit(5, 10), 11);
+    }
 }
