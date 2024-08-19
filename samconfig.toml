@@ -16,7 +16,6 @@ confirm_changeset = true
 resolve_s3 = true
 s3_prefix = "cat-gpt-slack-bot"
 region = "ap-northeast-1"
-profile = "slack-bot"
 image_repositories = []
 
 [default.sync.parameters]
