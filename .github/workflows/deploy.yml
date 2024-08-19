@@ -22,6 +22,7 @@ jobs:
         run: |
           pip install awscli
           pip install aws-sam-cli
+          pip install cargo-lambda
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
