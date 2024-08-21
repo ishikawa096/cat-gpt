@@ -1,10 +1,12 @@
 use super::handle_request::{ChatGptReqBody, Parameters, SlackHistoryResponse};
 use super::slack_message::SlackMessage;
 use crate::constants::*;
+use anyhow::Result;
+use reqwest::StatusCode;
 use reqwest::{header, Client};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::error::Error as StdError;
+use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct ApiClient {
@@ -12,6 +14,22 @@ pub struct ApiClient {
     slack_token: String,
     openai_token: String,
     channel: String,
+}
+
+#[derive(Error, Debug)]
+pub enum ApiClientError {
+    #[error("Request failed with status: {0}, at {1}")]
+    StatusError(StatusCode, &'static str),
+    #[error("Failed to parse: {0}")]
+    ParseError(#[from] serde_json::Error),
+    #[error("Slack post error: {0}")]
+    SlackPostError(String),
+    #[error("Slack update error: {0}")]
+    SlackUpdateError(String),
+    #[error("OpenAI API usage limit.")]
+    OpenaiUsageLimit(),
+    #[error("OpenAI API error: {0}")]
+    OpenaiError(String),
 }
 
 impl ApiClient {
@@ -51,7 +69,7 @@ impl ApiClient {
         channel: &str,
         text: &str,
         thread_ts: Option<&str>,
-    ) -> Result<String, Box<dyn StdError>> {
+    ) -> Result<String> {
         let mut form = HashMap::new();
         form.insert("channel", channel);
         form.insert("text", text);
@@ -66,15 +84,16 @@ impl ApiClient {
             .send()
             .await?;
         let res_text = res.text().await?;
-        let res_json: Value = serde_json::from_str(&res_text)?;
+        let res_json: Value =
+            serde_json::from_str(&res_text).map_err(ApiClientError::ParseError)?;
         if res_json["ok"] != true {
-            return Err(format!("Slack post error: {}", res_text).into());
+            return Err(ApiClientError::SlackPostError(res_text).into());
         }
         Ok(res_json["ts"].as_str().unwrap().to_owned())
     }
 
     // slackのメッセージを更新する
-    pub async fn update_message(&self, text: &str, ts: &str) -> Result<(), Box<dyn StdError>> {
+    pub async fn update_message(&self, text: &str, ts: &str) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
@@ -93,19 +112,16 @@ impl ApiClient {
             .send()
             .await?;
         let res_text = res.text().await?;
-        let res_json: Value = serde_json::from_str(&res_text)?;
+        let res_json: Value =
+            serde_json::from_str(&res_text).map_err(ApiClientError::ParseError)?;
         if res_json["ok"] != true {
-            return Err(format!("Slack update error: {}", res_text).into());
+            return Err(ApiClientError::SlackUpdateError(res_text).into());
         }
         Ok(())
     }
 
     // スレッド内のメッセージを取得する
-    pub async fn get_replies(
-        &self,
-        thread_ts: &str,
-        limit: &str,
-    ) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
+    pub async fn get_replies(&self, thread_ts: &str, limit: &str) -> Result<Vec<SlackMessage>> {
         let query = &[
             ("limit", limit),
             ("channel", self.channel.as_str()),
@@ -122,16 +138,17 @@ impl ApiClient {
 
         // エラーハンドリング
         if !res.status().is_success() {
-            return Err(format!("Error: {}", res.status()).into());
+            return Err(ApiClientError::StatusError(res.status(), "get_replies").into());
         }
 
         let body = res.text().await?;
-        let json: SlackHistoryResponse = serde_json::from_str(&body)?;
+        let json: SlackHistoryResponse =
+            serde_json::from_str(&body).map_err(ApiClientError::ParseError)?;
         return Ok(json.messages);
     }
 
     // チャンネル内のメッセージを取得する
-    pub async fn get_history(&self, limit: &str) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
+    pub async fn get_history(&self, limit: &str) -> Result<Vec<SlackMessage>> {
         let query = &[("limit", limit), ("channel", self.channel.as_str())];
         let res = self
             .client
@@ -143,11 +160,12 @@ impl ApiClient {
 
         // エラーハンドリング
         if !res.status().is_success() {
-            return Err(format!("Error: {}", res.status()).into());
+            return Err(ApiClientError::StatusError(res.status(), "get_history").into());
         }
 
         let body = res.text().await?;
-        let json: SlackHistoryResponse = serde_json::from_str(&body)?;
+        let json: SlackHistoryResponse =
+            serde_json::from_str(&body).map_err(ApiClientError::ParseError)?;
         return Ok(json.messages);
     }
 
@@ -156,7 +174,7 @@ impl ApiClient {
         &self,
         request_body: ChatGptReqBody,
         ts: &str,
-    ) -> Result<reqwest::Response, Box<dyn StdError>> {
+    ) -> Result<reqwest::Response> {
         let res = self
             .client
             .post(CHAT_GPT_POST_URL)
@@ -169,24 +187,31 @@ impl ApiClient {
             200 => Ok(res),
             429 => {
                 self.update_message(USAGE_LIMIT_MESSAGE, ts).await?;
-                return Err("ChatGPT usage limit".into());
+                return Err(ApiClientError::OpenaiUsageLimit().into());
             }
             400 => {
                 let body = res.text().await?;
-                if body.contains("invalid_image_format") {
-                    self.update_message(INVALID_IMAGE_FORMAT, ts).await?;
+                let error_message = if body.contains("invalid_image_format") {
+                    INVALID_IMAGE_FORMAT
                 } else {
-                    self.update_message(ERROR_FROM_OPEN_AI_MESSAGE, ts).await?;
+                    ERROR_FROM_OPEN_AI_MESSAGE
+                };
+                self.update_message(error_message, ts).await?;
+
+                let error = ApiClientError::OpenaiError(body);
+                print!("{}", error);
+                #[cfg(debug_assertions)]
+                {
+                    println!("request body: {}", json!(request_body));
                 }
-                println!("Error from ChatGPT: {}", body);
-                // println!("request body: {}", json!(request_body));
-                return Err("error from chatgpt".into());
+                return Err(error.into());
             }
             _ => {
                 let body = res.text().await?;
                 self.update_message(ERROR_FROM_OPEN_AI_MESSAGE, ts).await?;
-                println!("Error from ChatGPT: {}", body);
-                return Err("error from chatgpt".into());
+                let error = ApiClientError::OpenaiError(body);
+                print!("{}", error);
+                return Err(error.into());
             }
         }
     }
