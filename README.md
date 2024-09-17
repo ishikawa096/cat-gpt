@@ -1,9 +1,8 @@
 # CatGPT
+![catgpt](https://github.com/user-attachments/assets/effd2826-a544-40b0-b63d-f82f3591236c)
 
 - ネコ型のパーソナリティを持ったSlackBotです。
 - メッセージを送信するとOpenAPIを用いて応答を生成し返答します。
-https://github.com/user-attachments/assets/10dfde0e-2a74-40c5-b64d-40561a38fc22
-
 - インフラ構成や運用についての参考スライド
   - https://speakerdeck.com/ishikawa096/chatgpt-x-aws-lambdatezuo-ruslack-bot
 
@@ -34,6 +33,8 @@ https://github.com/user-attachments/assets/10dfde0e-2a74-40c5-b64d-40561a38fc22
 
 - Using the Slack Events API
   https://api.slack.com/apis/connections/events-api#the-events-api__receiving-events__callback-field-overview
+
+---
 
 # sam-app
 
