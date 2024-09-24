@@ -1,3 +1,4 @@
+use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures::future::join_all;
 use reqwest::{header::HeaderValue, Client};
@@ -86,7 +87,7 @@ impl ChatGptQuery {
         message: SlackMessage,
         bot_id: &str,
         slack_auth_token: &str,
-    ) -> Result<Self, reqwest::Error> {
+    ) -> Result<Self> {
         let role = if message.is_from(bot_id) {
             Role::Assistant
         } else {
