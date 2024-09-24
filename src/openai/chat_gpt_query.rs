@@ -70,16 +70,23 @@ impl ChatGptQuery {
         messages: Vec<SlackMessage>,
         bot_member_id: &str,
         slack_auth_token: &str,
-    ) -> Vec<ChatGptQuery> {
+    ) -> Vec<Self> {
+        // system prompt
+        let mut queries = vec![Self::new_system_prompt()];
+
         let chat_gpt_queries_futures = messages
             .into_iter()
-            .map(|m| ChatGptQuery::new_from_slack_message(m, bot_member_id, slack_auth_token));
+            .map(|m| Self::new_from_slack_message(m, bot_member_id, slack_auth_token));
 
-        join_all(chat_gpt_queries_futures)
+        let parsed_messages: Vec<Self> = join_all(chat_gpt_queries_futures)
             .await
             .into_iter()
             .filter_map(Result::ok)
-            .collect()
+            .collect();
+
+        // system promptの後にparsed_messagesを追加する
+        queries.extend(parsed_messages);
+        queries
     }
 
     // SlackメッセージをChatGPTのクエリメッセージ形式に変換する

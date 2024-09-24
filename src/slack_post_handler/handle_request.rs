@@ -187,10 +187,7 @@ async fn create_request_body_for_chat_gpt(
     // 最新メッセージ以外のメッセージの画像を空にする
     let contexts_with_new_files_only = delete_old_files(contexts, &trigger_message.ts);
 
-    // system prompt
-    let mut messages = vec![ChatGptQuery::new_system_prompt()];
-
-    let parsed_messages = ChatGptQuery::new_from_slack_messages(
+    let messages = ChatGptQuery::new_from_slack_messages(
         order_by_ts(contexts_with_new_files_only),
         &bot_member_id,
         &parameters.slack_auth_token,
@@ -199,13 +196,12 @@ async fn create_request_body_for_chat_gpt(
 
     #[cfg(debug_assertions)]
     {
-        println!("parsed_messages: {:?}", parsed_messages);
+        println!("messages: {:?}", messages);
     }
 
-    // system promptの後にmessagesを追加する
-    messages.extend(parsed_messages);
-
     let env_vars = get_enviroment_variable()?;
+
+    // TODO: o1と分岐
     let response = ChatGptReqBody {
         messages: messages,
         model: env_vars.gpt_model,
