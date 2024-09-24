@@ -1,9 +1,9 @@
 # CatGPT
 
-- ネコ型のパーソナリティを持ったSlackBotです。
-- メッセージを送信するとOpenAPIを用いて応答を生成し返答します。
-  https://github.com/user-attachments/assets/10dfde0e-2a74-40c5-b64d-40561a38fc22
+![catgpt](https://github.com/user-attachments/assets/effd2826-a544-40b0-b63d-f82f3591236c)
 
+- ネコ型のパーソナリティを持った SlackBot です。
+- メッセージを送信すると OpenAPI を用いて応答を生成し返答します。
 - インフラ構成や運用についての参考スライド
   - https://speakerdeck.com/ishikawa096/chatgpt-x-aws-lambdatezuo-ruslack-bot
 
