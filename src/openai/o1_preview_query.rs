@@ -1,7 +1,5 @@
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures::future::join_all;
-use reqwest::{header::HeaderValue, Client};
 use serde::Serialize;
 use serde_derive::Deserialize;
 
@@ -57,37 +55,42 @@ struct ImageUrl {
 }
 
 impl ChatGptQuery {
-    // システムプロンプトを生成
-    pub fn new_system_prompt() -> Self {
-        Self {
-            role: Role::System,
-            content: ChatGptQueryContentEnum::Text(CHAT_GPT_SYSTEM_PROMPT.to_string()),
-        }
+    /**
+     * preview版APIがシステムプロンプトに対応していないため、メッセージの文頭にシステムプロンプトを追加する
+     */
+    fn add_system_prompt(&mut self) {
+        let system_prompt = ChatGptQueryContentEnum::Text(CHAT_GPT_SYSTEM_PROMPT.to_string());
+        let new_text = format!("{:?}{:?}", system_prompt, self.content);
+        self.content = ChatGptQueryContentEnum::Text(new_text);
     }
 
     // SlackメッセージをChatGPTのクエリメッセージ形式に変換する
     pub async fn new_from_slack_messages(
         messages: Vec<SlackMessage>,
         bot_member_id: &str,
-        slack_auth_token: &str,
     ) -> Vec<ChatGptQuery> {
         let chat_gpt_queries_futures = messages
             .into_iter()
-            .map(|m| ChatGptQuery::new_from_slack_message(m, bot_member_id, slack_auth_token));
+            .map(|m| ChatGptQuery::new_from_slack_message(m, bot_member_id));
 
-        join_all(chat_gpt_queries_futures)
+        let mut queries: Vec<ChatGptQuery> = join_all(chat_gpt_queries_futures)
             .await
             .into_iter()
             .filter_map(Result::ok)
-            .collect()
+            .collect();
+
+        // 最後のメッセージの文頭にシステムプロンプトを追加
+        if let Some(last_query) = queries.last_mut() {
+            last_query.add_system_prompt();
+        };
+
+        queries
     }
 
-    // SlackメッセージをChatGPTのクエリメッセージ形式に変換する
-    async fn new_from_slack_message(
-        message: SlackMessage,
-        bot_id: &str,
-        slack_auth_token: &str,
-    ) -> Result<Self> {
+    /**
+     * SlackメッセージをChatGPTのクエリメッセージ形式に変換する
+     */
+    async fn new_from_slack_message(message: SlackMessage, bot_id: &str) -> Result<Self> {
         let role = if message.is_from(bot_id) {
             Role::Assistant
         } else {
@@ -95,53 +98,8 @@ impl ChatGptQuery {
         };
 
         let text = message.pure_text();
-        let content = if message.files.is_some() {
-            // ファイルがある場合はテキストと画像を組み合わせる
-            let text_contents = vec![QueryContent {
-                type_name: "text".into(),
-                text: Some(text),
-                image_url: None,
-            }];
-
-            let files = message.files.as_ref().unwrap();
-            let file_contents_futures = files.iter().map(|f| async {
-                let api_client = Client::new();
-                let file = api_client
-                    .get(f.url_private.clone())
-                    .header(
-                        "Authorization",
-                        format!("Bearer {}", &slack_auth_token)
-                            .parse::<HeaderValue>()
-                            .unwrap(),
-                    )
-                    .send()
-                    .await?;
-                // fileをbase64エンコードする
-                let file_base64 = STANDARD.encode(file.bytes().await?);
-                // f"data:image/jpeg;base64,{file_base64}"の形式にする
-                let image_url = format!("data:{};base64,{}", f.mimetype.clone(), file_base64);
-
-                Ok::<QueryContent, reqwest::Error>(QueryContent {
-                    type_name: "image_url".into(),
-                    image_url: Some(ImageUrl { url: image_url }),
-                    text: None,
-                })
-            });
-            let file_contents: Vec<QueryContent> = join_all(file_contents_futures)
-                .await
-                .into_iter()
-                .filter_map(Result::ok)
-                .collect();
-
-            let combined_content = text_contents
-                .into_iter()
-                .chain(file_contents.into_iter())
-                .collect::<Vec<QueryContent>>();
-            ChatGptQueryContentEnum::QueryContent(combined_content)
-        } else {
-            // ファイルがない場合はテキストのみ
-            ChatGptQueryContentEnum::Text(text)
-        };
+        // preview版APIが画像に対応していないため、テキストのみ
+        let content = ChatGptQueryContentEnum::Text(text);
 
         Ok(Self {
             role: role,
