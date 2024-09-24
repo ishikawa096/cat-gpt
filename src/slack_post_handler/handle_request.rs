@@ -11,8 +11,9 @@ use crate::constants::{
 use crate::slack_post_handler::api_client::ApiClient;
 use crate::slack_post_handler::slack_message::SlackMessage;
 
-use super::chat_gpt_query::ChatGptQuery;
-use super::handle_chat_gpt_response::handle_chat_gpt_response;
+use crate::openai::chat_gpt_query::ChatGptQuery;
+use crate::openai::handle_stream_response::handle_stream_response;
+
 use super::validate_slack_signature::validate_slack_signature;
 
 #[derive(Deserialize)]
@@ -268,7 +269,7 @@ async fn handle_slack_event(slack_event: SlackEvent, parameters: Parameters) -> 
         .await?;
 
     // ストリームを処理
-    handle_chat_gpt_response(res, api_client, bot_message_ts.as_str()).await
+    handle_stream_response(res, api_client, bot_message_ts.as_str()).await
 }
 
 // ParameterStoreのパラメータを取得する

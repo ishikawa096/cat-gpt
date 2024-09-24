@@ -1,5 +1,6 @@
-use super::{api_client::ApiClient, chat_gpt_res_body::ChatGptResBody};
 use crate::constants::ERROR_FROM_OPEN_AI_MESSAGE;
+use crate::openai::chat_gpt_res_body::ChatGptResBody;
+use crate::slack_post_handler::api_client::ApiClient;
 use anyhow::Result;
 use futures::StreamExt;
 use reqwest::Response;
@@ -12,7 +13,7 @@ pub enum OpenAIError {
     ReadingStream(String),
 }
 
-pub async fn handle_chat_gpt_response(
+pub async fn handle_stream_response(
     res: Response,
     api_client: ApiClient,
     bot_message_ts: &str,

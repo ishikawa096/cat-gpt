@@ -1,6 +1,7 @@
 use crate::slack_post_handler::handle_request::handle_request;
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
 pub mod constants;
+pub mod openai;
 pub mod slack_post_handler;
 
 // slackからのリクエストを受け取る

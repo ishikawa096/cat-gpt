@@ -7,7 +7,7 @@ use serde_derive::Deserialize;
 
 use crate::constants::CHAT_GPT_SYSTEM_PROMPT;
 
-use super::slack_message::SlackMessage;
+use crate::slack_post_handler::slack_message::SlackMessage;
 
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "snake_case")]
