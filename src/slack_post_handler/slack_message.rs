@@ -1,3 +1,5 @@
+use std::fmt;
+
 use regex::Regex;
 use serde_derive::Deserialize;
 
@@ -108,6 +110,16 @@ impl SlackMessage {
         let is_not_from_bot = !self.is_from(bot_id);
 
         is_message_type && is_file_share_or_no_subtype && is_not_from_bot
+    }
+}
+
+impl fmt::Display for SlackMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SlackMessage {{ ts: {}, channel: {:?}, text: {:?}, files: {:?} }}",
+            self.ts, self.channel, self.text, self.files
+        )
     }
 }
 
