@@ -1,8 +1,9 @@
+use anyhow::Result;
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_ssm::Client;
 use lambda_http::{Body, Error, Request};
 use serde_derive::{Deserialize, Serialize};
-use std::{error::Error as StdError, process};
+use thiserror::Error;
 
 use crate::constants::{
     INVALID_IMAGE_FORMAT, LOADING_EMOJI, NO_CONTEXTS_MESSAGE, VALID_MIME_TYPES,
@@ -58,13 +59,20 @@ struct SlackEvent {
     challenge: Option<String>,
 }
 
-fn get_enviroment_variable() -> Env {
+#[derive(Error, Debug)]
+pub enum HandleRequestError {
+    #[error("contexts is empty")]
+    ContextsIsEmpty,
+    #[error("get_enviroment_variable err: {0}")]
+    GetEnviromentVariableError(String),
+    #[error("Missing channel. trigger_message: {0}")]
+    MissingChannel(String),
+}
+
+fn get_enviroment_variable() -> Result<Env> {
     match envy::from_env::<Env>() {
-        Ok(val) => val,
-        Err(err) => {
-            println!("fetch_messages_in_channel err: {}", err);
-            process::exit(1);
-        }
+        Ok(val) => Ok(val),
+        Err(err) => Err(HandleRequestError::GetEnviromentVariableError(err.to_string()).into()),
     }
 }
 
@@ -103,13 +111,13 @@ fn delete_old_files(messages: Vec<SlackMessage>, latest_ts: &str) -> Vec<SlackMe
 async fn fetch_contexts(
     trigger_message: &SlackMessage,
     parameters: &Parameters,
-) -> Result<Vec<SlackMessage>, Box<dyn StdError>> {
+) -> Result<Vec<SlackMessage>> {
     let bot_member_id = &parameters.bot_member_id;
     let is_in_thread = trigger_message.is_in_thread();
     let is_mention_to_bot = trigger_message.is_mention_to(&bot_member_id);
     let message_channel = trigger_message.channel.clone().unwrap();
     let thread_ts = trigger_message.thread_ts.clone().unwrap_or("".to_string());
-    let env_vars = get_enviroment_variable();
+    let env_vars = get_enviroment_variable()?;
     let limit = trigger_message.get_limit(env_vars.default_past_num, env_vars.max_past_num);
 
     // 1つのみ取得する場合は、trigger_messageを返す
@@ -160,7 +168,7 @@ async fn fetch_contexts(
 async fn create_request_body_for_chat_gpt(
     trigger_message: &SlackMessage,
     parameters: &Parameters,
-) -> Result<ChatGptReqBody, Box<dyn StdError>> {
+) -> Result<ChatGptReqBody> {
     let bot_member_id = parameters.bot_member_id.clone();
     let contexts = fetch_contexts(trigger_message, parameters).await?;
     if contexts.len() == 0 {
@@ -172,7 +180,7 @@ async fn create_request_body_for_chat_gpt(
                 trigger_message.new_message_thread_ts().as_deref(),
             )
             .await?;
-        return Err("contexts is empty".into());
+        return Err(HandleRequestError::ContextsIsEmpty.into());
     }
 
     // 最新メッセージ以外のメッセージの画像を空にする
@@ -187,11 +195,16 @@ async fn create_request_body_for_chat_gpt(
         &parameters.slack_auth_token,
     )
     .await;
-    println!("parsed_messages: {:?}", parsed_messages);
+
+    #[cfg(debug_assertions)]
+    {
+        println!("parsed_messages: {:?}", parsed_messages);
+    }
+
     // system promptの後にmessagesを追加する
     messages.extend(parsed_messages);
 
-    let env_vars = get_enviroment_variable();
+    let env_vars = get_enviroment_variable()?;
     let response = ChatGptReqBody {
         messages: messages,
         model: env_vars.gpt_model,
@@ -202,10 +215,7 @@ async fn create_request_body_for_chat_gpt(
 }
 
 // Slackイベントに応じて処理
-async fn handle_slack_event(
-    slack_event: SlackEvent,
-    parameters: Parameters,
-) -> Result<(), Box<dyn StdError>> {
+async fn handle_slack_event(slack_event: SlackEvent, parameters: Parameters) -> Result<()> {
     // println!("slack_event: {:?}", slack_event);
 
     // event_callback以外は無視する
@@ -222,8 +232,7 @@ async fn handle_slack_event(
     let channel = match trigger_message.channel.clone() {
         Some(val) => val,
         None => {
-            println!("channel is none. trigger_message: {:?}", trigger_message);
-            return Ok(());
+            return Err(HandleRequestError::MissingChannel(trigger_message.to_string()).into());
         }
     };
     let thread_ts = trigger_message.new_message_thread_ts();
@@ -273,7 +282,7 @@ async fn get_parameters() -> Result<Parameters, Error> {
     let resp = client
         .get_parameter()
         .with_decryption(true)
-        .name(get_enviroment_variable().parameter_store_name)
+        .name(get_enviroment_variable()?.parameter_store_name)
         .send()
         .await
         .expect("cannot get parameter");
