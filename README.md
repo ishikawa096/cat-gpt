@@ -2,7 +2,7 @@
 
 - ネコ型のパーソナリティを持ったSlackBotです。
 - メッセージを送信するとOpenAPIを用いて応答を生成し返答します。
-https://github.com/user-attachments/assets/10dfde0e-2a74-40c5-b64d-40561a38fc22
+  https://github.com/user-attachments/assets/10dfde0e-2a74-40c5-b64d-40561a38fc22
 
 - インフラ構成や運用についての参考スライド
   - https://speakerdeck.com/ishikawa096/chatgpt-x-aws-lambdatezuo-ruslack-bot
@@ -14,12 +14,7 @@ https://github.com/user-attachments/assets/10dfde0e-2a74-40c5-b64d-40561a38fc22
 ## Deploy
 
 - profile slack-bot の場合
-  sam deploy --profile slack-bot --capabilities CAPABILITY_NAMED_IAM
-
-## TODO
-
-- ロジックの切り出し、リファクタリング
-- 即座に 200 OK を返しつつ、別の lambda 関数を呼び出し非同期に処理する
+  sam deploy --profile slack-bot --capabilities CAPABILITY_NAMED_IAM --no-confirm-changeset
 
 ## 参考にさせていただきました
 
@@ -34,6 +29,13 @@ https://github.com/user-attachments/assets/10dfde0e-2a74-40c5-b64d-40561a38fc22
 
 - Using the Slack Events API
   https://api.slack.com/apis/connections/events-api#the-events-api__receiving-events__callback-field-overview
+
+## TODO
+
+- ロジックの切り出し、リファクタリング
+- 即座に 200 OK を返しつつ、別の lambda 関数を呼び出し非同期に処理する
+- エラー通知
+- プレビュー版 model の使用フラグ追加
 
 # sam-app
 
