@@ -187,7 +187,7 @@ impl ApiClient {
             200 => Ok(res),
             429 => {
                 self.update_message(USAGE_LIMIT_MESSAGE, ts).await?;
-                return Err(ApiClientError::OpenaiUsageLimit().into());
+                Err(ApiClientError::OpenaiUsageLimit().into())
             }
             400 => {
                 let body = res.text().await?;
@@ -197,21 +197,20 @@ impl ApiClient {
                     ERROR_FROM_OPEN_AI_MESSAGE
                 };
                 self.update_message(error_message, ts).await?;
-
-                let error = ApiClientError::OpenaiError(body);
-                print!("{}", error);
                 #[cfg(debug_assertions)]
                 {
                     println!("request body: {}", json!(request_body));
                 }
-                return Err(error.into());
+                Err(ApiClientError::OpenaiError(body).into())
             }
             _ => {
-                let body = res.text().await?;
                 self.update_message(ERROR_FROM_OPEN_AI_MESSAGE, ts).await?;
-                let error = ApiClientError::OpenaiError(body);
-                print!("{}", error);
-                return Err(error.into());
+                #[cfg(debug_assertions)]
+                {
+                    println!("request body: {}", json!(request_body));
+                }
+                let body = res.text().await?;
+                Err(ApiClientError::OpenaiError(body).into())
             }
         }
     }

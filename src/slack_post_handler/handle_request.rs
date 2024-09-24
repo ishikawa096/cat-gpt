@@ -321,7 +321,7 @@ pub async fn handle_request(event: Request) -> String {
     handle_slack_event(slack_event, parameters)
         .await
         .unwrap_or_else(|e| {
-            println!("Error: {}", e);
+            eprintln!("Error: {}", e);
         });
 
     "OK".to_string()
