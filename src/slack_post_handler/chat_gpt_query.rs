@@ -1,3 +1,4 @@
+use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures::future::join_all;
 use reqwest::{header::HeaderValue, Client};
@@ -86,7 +87,7 @@ impl ChatGptQuery {
         message: SlackMessage,
         bot_id: &str,
         slack_auth_token: &str,
-    ) -> Result<Self, reqwest::Error> {
+    ) -> Result<Self> {
         let role = if message.is_from(bot_id) {
             Role::Assistant
         } else {
@@ -97,7 +98,7 @@ impl ChatGptQuery {
         let content = if message.files.is_some() {
             // ファイルがある場合はテキストと画像を組み合わせる
             let text_contents = vec![QueryContent {
-                type_name: "text".to_string(),
+                type_name: "text".into(),
                 text: Some(text),
                 image_url: None,
             }];
@@ -120,8 +121,8 @@ impl ChatGptQuery {
                 // f"data:image/jpeg;base64,{file_base64}"の形式にする
                 let image_url = format!("data:{};base64,{}", f.mimetype.clone(), file_base64);
 
-                Ok::<_, reqwest::Error>(QueryContent {
-                    type_name: "image_url".to_string(),
+                Ok::<QueryContent, reqwest::Error>(QueryContent {
+                    type_name: "image_url".into(),
                     image_url: Some(ImageUrl { url: image_url }),
                     text: None,
                 })

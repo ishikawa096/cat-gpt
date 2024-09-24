@@ -1,8 +1,9 @@
 # CatGPT
+
 ![catgpt](https://github.com/user-attachments/assets/effd2826-a544-40b0-b63d-f82f3591236c)
 
-- ネコ型のパーソナリティを持ったSlackBotです。
-- メッセージを送信するとOpenAPIを用いて応答を生成し返答します。
+- ネコ型のパーソナリティを持った SlackBot です。
+- メッセージを送信すると OpenAPI を用いて応答を生成し返答します。
 - インフラ構成や運用についての参考スライド
   - https://speakerdeck.com/ishikawa096/chatgpt-x-aws-lambdatezuo-ruslack-bot
 
@@ -13,12 +14,7 @@
 ## Deploy
 
 - profile slack-bot の場合
-  sam deploy --profile slack-bot --capabilities CAPABILITY_NAMED_IAM
-
-## TODO
-
-- ロジックの切り出し、リファクタリング
-- 即座に 200 OK を返しつつ、別の lambda 関数を呼び出し非同期に処理する
+  sam deploy --profile slack-bot --capabilities CAPABILITY_NAMED_IAM --no-confirm-changeset
 
 ## 参考にさせていただきました
 
@@ -34,7 +30,12 @@
 - Using the Slack Events API
   https://api.slack.com/apis/connections/events-api#the-events-api__receiving-events__callback-field-overview
 
----
+## TODO
+
+- ロジックの切り出し、リファクタリング
+- 即座に 200 OK を返しつつ、別の lambda 関数を呼び出し非同期に処理する
+- エラー通知
+- プレビュー版 model の使用フラグ追加
 
 # sam-app
 

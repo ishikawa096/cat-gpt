@@ -1,15 +1,22 @@
 use super::{api_client::ApiClient, chat_gpt_res_body::ChatGptResBody};
 use crate::constants::ERROR_FROM_OPEN_AI_MESSAGE;
+use anyhow::Result;
 use futures::StreamExt;
 use reqwest::Response;
-use std::error::Error as StdError;
 use std::time::{Duration, Instant};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum OpenAIError {
+    #[error("Reading Stream Error: {0}")]
+    ReadingStream(String),
+}
 
 pub async fn handle_chat_gpt_response(
     res: Response,
     api_client: ApiClient,
     bot_message_ts: &str,
-) -> Result<(), Box<dyn StdError>> {
+) -> Result<()> {
     let mut stream = res.bytes_stream();
 
     let mut last_update = Instant::now() - Duration::from_secs(1);
@@ -94,7 +101,7 @@ pub async fn handle_chat_gpt_response(
                 }
             }
             Err(e) => {
-                println!("Error from ChatGPT stream: {}", e);
+                return Err(OpenAIError::ReadingStream(e.to_string()).into());
             }
         }
     }
@@ -119,7 +126,7 @@ async fn update_message_if_complite_string(
     last_update: &mut Instant,
     last_post_text: &mut String,
     bot_message_ts: &str,
-) -> Result<bool, Box<dyn StdError>> {
+) -> Result<bool> {
     match partial_str.strip_prefix("data: ") {
         Some(ps) => {
             if ps == "[DONE]" {
@@ -162,7 +169,7 @@ async fn update_message_if_complite_bytes(
     last_update: &mut Instant,
     last_post_text: &mut String,
     bot_message_ts: &str,
-) -> Result<bool, Box<dyn StdError>> {
+) -> Result<bool> {
     match std::str::from_utf8(&partial_bytes) {
         Ok(ps) => {
             match ps.strip_prefix("data: ") {
@@ -214,7 +221,7 @@ async fn update_message_every_second(
     last_update: &mut Instant,
     last_post_text: &mut String,
     bot_message_ts: &str,
-) -> Result<(), Box<dyn StdError>> {
+) -> Result<()> {
     let content = json.get_content();
     if content.len() == 0 {
         return Ok(());
