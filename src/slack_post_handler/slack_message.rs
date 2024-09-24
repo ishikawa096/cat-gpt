@@ -130,13 +130,13 @@ mod tests {
     #[test]
     fn test_pure_text() {
         let message = SlackMessage {
-            text: "<@U01J9QZQZ9Z> <@U01YH89HJ2K> past10こんにちはpast3".to_string(),
+            text: "<@U01J9QZQZ9Z> <@U01YH89HJ2K> past10こんにちはpast3".into(),
             thread_ts: None,
-            type_name: "message".to_string(),
+            type_name: "message".into(),
             subtype: None,
-            user: "U01J9QZQZ9Z".to_string(),
-            channel: Some("D024BE91L".to_string()),
-            ts: "1627777777.000000".to_string(),
+            user: "U01J9QZQZ9Z".into(),
+            channel: Some("D024BE91L".into()),
+            ts: "1627777777.000000".into(),
             channel_type: None,
             files: None,
         };
@@ -146,13 +146,13 @@ mod tests {
     #[test]
     fn test_get_limit() {
         let message = SlackMessage {
-            text: "past10\nこんにちはpast0".to_string(),
+            text: "past10\nこんにちはpast0".into(),
             thread_ts: None,
-            type_name: "message".to_string(),
+            type_name: "message".into(),
             subtype: None,
-            user: "U01J9QZQZ9Z".to_string(),
-            channel: Some("D024BE91L".to_string()),
-            ts: "1627777777.000000".to_string(),
+            user: "U01J9QZQZ9Z".into(),
+            channel: Some("D024BE91L".into()),
+            ts: "1627777777.000000".into(),
             channel_type: None,
             files: None,
         };

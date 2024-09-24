@@ -38,7 +38,7 @@ impl ApiClient {
             client: Client::new(),
             slack_token: params.slack_auth_token.clone(),
             openai_token: params.openai_secret_key.clone(),
-            channel: channel.to_string(),
+            channel: channel.into(),
         }
     }
 

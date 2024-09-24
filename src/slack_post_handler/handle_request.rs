@@ -116,7 +116,7 @@ async fn fetch_contexts(
     let is_in_thread = trigger_message.is_in_thread();
     let is_mention_to_bot = trigger_message.is_mention_to(&bot_member_id);
     let message_channel = trigger_message.channel.clone().unwrap();
-    let thread_ts = trigger_message.thread_ts.clone().unwrap_or("".to_string());
+    let thread_ts = trigger_message.thread_ts.clone().unwrap_or("".into());
     let env_vars = get_enviroment_variable()?;
     let limit = trigger_message.get_limit(env_vars.default_past_num, env_vars.max_past_num);
 
