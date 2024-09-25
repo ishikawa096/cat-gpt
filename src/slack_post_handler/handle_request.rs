@@ -201,14 +201,25 @@ async fn create_request_body_for_chat_gpt(
 
     let env_vars = get_enviroment_variable()?;
 
-    // TODO: o1と分岐
-    let response = ChatGptReqBody {
-        messages: messages,
-        model: env_vars.gpt_model,
-        temperature: env_vars.temperature,
-        stream: true,
+    let is_o1_preview = trigger_message.is_o1_preview();
+
+    let response = if is_o1_preview {
+        // NOTE: o1-previewの場合、API側で未対応のパラメーターを固定値にする
+        ChatGptReqBody {
+            messages: messages,
+            model: "o1-preview".to_string(),
+            temperature: 1.0,
+            stream: false,
+        }
+    } else {
+        ChatGptReqBody {
+            messages: messages,
+            model: env_vars.gpt_model,
+            temperature: env_vars.temperature,
+            stream: true,
+        }
     };
-    return Ok(response);
+    Ok(response)
 }
 
 // Slackイベントに応じて処理

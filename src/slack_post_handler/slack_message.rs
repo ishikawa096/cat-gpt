@@ -51,14 +51,23 @@ impl SlackMessage {
         self.user == user_id
     }
 
+    // o1-preview指定かどうか
+    pub fn is_o1_preview(&self) -> bool {
+        let o1_preview_regex = Regex::new(r"^o1").unwrap();
+        o1_preview_regex.is_match(&self.text)
+    }
+
     // メンション文字列とコマンドを削除したメッセージ本文
     pub fn pure_text(&self) -> String {
         // メンション文字列
-        let re = Regex::new(r"^<.+> ").unwrap();
+        let mention_regex = Regex::new(r"^<.+> ").unwrap();
         // past(数字)(過去のメッセージを参照するコマンド)
-        let command_re = Regex::new(r"^past(\d+)").unwrap();
-        let result = re.replace(&self.text, "").to_string();
-        command_re.replace(&result, "").trim().to_string()
+        let command_regex = Regex::new(r"^past(\d+)").unwrap();
+        // o1(o1-preview指定)
+        let o1_preview_regex = Regex::new(r"^o1").unwrap();
+        let mut result = mention_regex.replace(&self.text, "").to_string();
+        result = o1_preview_regex.replace(&result, "").trim().to_string();
+        command_regex.replace(&result, "").to_string()
     }
 
     // past(数字)コマンドの数字を取得する
@@ -131,6 +140,22 @@ mod tests {
     fn test_pure_text() {
         let message = SlackMessage {
             text: "<@U01J9QZQZ9Z> <@U01YH89HJ2K> past10こんにちはpast3".into(),
+            thread_ts: None,
+            type_name: "message".into(),
+            subtype: None,
+            user: "U01J9QZQZ9Z".into(),
+            channel: Some("D024BE91L".into()),
+            ts: "1627777777.000000".into(),
+            channel_type: None,
+            files: None,
+        };
+        assert_eq!(message.pure_text(), "こんにちはpast3");
+    }
+
+    #[test]
+    fn test_pure_text_o1() {
+        let message = SlackMessage {
+            text: "<@U01J9QZQZ9Z> <@U01YH89HJ2K> o1 past10こんにちはpast3".into(),
             thread_ts: None,
             type_name: "message".into(),
             subtype: None,
