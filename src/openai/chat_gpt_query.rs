@@ -155,4 +155,59 @@ impl ChatGptQuery {
             content: content,
         })
     }
+
+    /**
+     * preview版APIがシステムプロンプトに対応していないため、メッセージの文頭にシステムプロンプトを追加する
+     */
+    fn add_system_prompt_for_preview_model(&mut self) {
+        let system_prompt = ChatGptQueryContentEnum::Text(CHAT_GPT_SYSTEM_PROMPT.to_string());
+        let new_text = format!("{:?}{:?}", system_prompt, self.content);
+        self.content = ChatGptQueryContentEnum::Text(new_text);
+    }
+
+    // SlackメッセージをChatGPTのクエリメッセージ形式に変換する(preview版API用)
+    pub async fn new_from_slack_messages_for_preview_model(
+        messages: Vec<SlackMessage>,
+        bot_member_id: &str,
+    ) -> Vec<Self> {
+        let chat_gpt_queries_futures = messages
+            .into_iter()
+            .map(|m| Self::new_from_slack_message_for_preview_model(m, bot_member_id));
+
+        let mut queries: Vec<Self> = join_all(chat_gpt_queries_futures)
+            .await
+            .into_iter()
+            .filter_map(Result::ok)
+            .collect();
+
+        // 最後のメッセージの文頭にシステムプロンプトを追加
+        if let Some(last_query) = queries.last_mut() {
+            last_query.add_system_prompt_for_preview_model();
+        };
+
+        queries
+    }
+
+    /**
+     * SlackメッセージをChatGPTのクエリメッセージ形式に変換する
+     */
+    async fn new_from_slack_message_for_preview_model(
+        message: SlackMessage,
+        bot_id: &str,
+    ) -> Result<Self> {
+        let role = if message.is_from(bot_id) {
+            Role::Assistant
+        } else {
+            Role::User
+        };
+
+        let text = message.pure_text();
+        // preview版APIが画像に対応していないため、テキストのみ
+        let content = ChatGptQueryContentEnum::Text(text);
+
+        Ok(Self {
+            role: role,
+            content: content,
+        })
+    }
 }

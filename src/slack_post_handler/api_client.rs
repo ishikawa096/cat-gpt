@@ -209,7 +209,9 @@ impl ApiClient {
                 {
                     println!("request body: {}", json!(request_body));
                 }
+                println!("request body: {}", json!(request_body));
                 let body = res.text().await?;
+                println!("res body: {}", json!(body));
                 Err(ApiClientError::OpenaiError(body).into())
             }
         }

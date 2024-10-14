@@ -6,8 +6,9 @@ use serde_derive::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::constants::{
-    INVALID_IMAGE_FORMAT, LOADING_EMOJI, NO_CONTEXTS_MESSAGE, VALID_MIME_TYPES,
+    EMPTY_MESSAGE, INVALID_IMAGE_FORMAT, LOADING_EMOJI, NO_CONTEXTS_MESSAGE, VALID_MIME_TYPES,
 };
+use crate::openai::o1_perview_res_body::O1PreviewResBody;
 use crate::slack_post_handler::api_client::ApiClient;
 use crate::slack_post_handler::slack_message::SlackMessage;
 
@@ -187,6 +188,25 @@ async fn create_request_body_for_chat_gpt(
     // 最新メッセージ以外のメッセージの画像を空にする
     let contexts_with_new_files_only = delete_old_files(contexts, &trigger_message.ts);
 
+    let is_o1_preview = trigger_message.is_o1_preview();
+    let env_vars = get_enviroment_variable()?;
+
+    // NOTE: o1-peviewの場合はChatGptQueryではなくO1PreviewQueryを使用する
+    if is_o1_preview {
+        let messages = ChatGptQuery::new_from_slack_messages_for_preview_model(
+            order_by_ts(contexts_with_new_files_only),
+            &bot_member_id,
+        )
+        .await;
+        let response = ChatGptReqBody {
+            messages: messages,
+            model: "o1-preview".to_string(),
+            temperature: 1.0,
+            stream: false,
+        };
+        return Ok(response);
+    }
+
     let messages = ChatGptQuery::new_from_slack_messages(
         order_by_ts(contexts_with_new_files_only),
         &bot_member_id,
@@ -199,25 +219,11 @@ async fn create_request_body_for_chat_gpt(
         println!("messages: {:?}", messages);
     }
 
-    let env_vars = get_enviroment_variable()?;
-
-    let is_o1_preview = trigger_message.is_o1_preview();
-
-    let response = if is_o1_preview {
-        // NOTE: o1-previewの場合、API側で未対応のパラメーターを固定値にする
-        ChatGptReqBody {
-            messages: messages,
-            model: "o1-preview".to_string(),
-            temperature: 1.0,
-            stream: false,
-        }
-    } else {
-        ChatGptReqBody {
-            messages: messages,
-            model: env_vars.gpt_model,
-            temperature: env_vars.temperature,
-            stream: true,
-        }
+    let response = ChatGptReqBody {
+        messages: messages,
+        model: env_vars.gpt_model,
+        temperature: env_vars.temperature,
+        stream: true,
     };
     Ok(response)
 }
@@ -275,8 +281,42 @@ async fn handle_slack_event(slack_event: SlackEvent, parameters: Parameters) -> 
         .get_chat_gpt_response(request_body, &bot_message_ts)
         .await?;
 
+    if trigger_message.is_o1_preview() {
+        // o1-previewの場合はストリーミング未対応のため別途処理
+        let body = res.text().await?;
+        // println!("o1-preview body: {:?}", body);
+        let json: O1PreviewResBody = serde_json::from_str(&body)?;
+        let choices = json.choices;
+        if choices.is_empty() {
+            api_client
+                .update_message(EMPTY_MESSAGE, &bot_message_ts)
+                .await?;
+            println!(
+                "choices is empty. trigger_message: {:?}, res: {:?}",
+                &trigger_message, &body
+            );
+            return Ok(());
+        }
+        let content = choices[0]
+            .message
+            .as_ref()
+            .map_or(EMPTY_MESSAGE, |msg| msg.content.as_str());
+        if content.is_empty() {
+            api_client
+                .update_message(EMPTY_MESSAGE, &bot_message_ts)
+                .await?;
+            println!(
+                "content is empty. trigger_message: {:?}, res: {:?}",
+                &trigger_message, &body
+            );
+            return Ok(());
+        }
+        // println!("o1-preview content: {:?}", content);
+        api_client.update_message(content, &bot_message_ts).await?;
+        return Ok(());
+    }
     // ストリームを処理
-    handle_stream_response(res, api_client, bot_message_ts.as_str()).await
+    handle_stream_response(res, api_client, &bot_message_ts).await
 }
 
 // ParameterStoreのパラメータを取得する

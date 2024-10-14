@@ -13,6 +13,8 @@ pub const ERROR_MESSAGE: &str = "エラーですにゃ。めんご。";
 pub const NO_CONTEXTS_MESSAGE: &str = "メッセージを受け取れませんでしたにゃ。めんご。";
 pub const ERROR_FROM_OPEN_AI_MESSAGE: &str =
     "OpenAIからエラーが返ってきましたにゃ。調子が悪い可能性がありますにゃ。めんご。";
+pub const EMPTY_MESSAGE: &str =
+    "OpenAIからの返答が空ですにゃ。調子が悪い可能性がありますにゃ。めんご。";
 pub const USAGE_LIMIT_MESSAGE: &str = "OpenAIの使用制限に達しましたにゃ。また後でよろしくにゃ。";
 pub const INVALID_IMAGE_FORMAT: &str =
     "対応していないファイル形式ですにゃ。20MB以下のpng,jpeg,gif,webpのいずれかでお願いにゃ。";
